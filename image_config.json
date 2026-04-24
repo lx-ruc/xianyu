@@ -1,0 +1,22 @@
+{
+  "images": [
+    {
+      "id": "score",
+      "description": "数一140+成绩截图，展示真实考研数学成绩",
+      "keywords": ["成绩", "分数", "考了多少", "真的假的", "实力", "多少分", "140"],
+      "file": "images/score.png"
+    },
+    {
+      "id": "outline",
+      "description": "课程大纲和思维导图示例，展示教学体系和知识点梳理方式",
+      "keywords": ["课程", "大纲", "怎么上课", "上课方式", "内容", "教什么", "思维导图"],
+      "file": "images/outline.png"
+    },
+    {
+      "id": "feedback",
+      "description": "学员上岸反馈截图，展示真实学员好评和提分案例",
+      "keywords": ["效果", "靠谱吗", "有用吗", "上岸", "评价", "反馈", "好评", "口碑"],
+      "file": "images/feedback.png"
+    }
+  ]
+}

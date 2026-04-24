@@ -7,6 +7,8 @@ import requests
 from loguru import logger
 from utils.xianyu_utils import generate_sign
 
+UPLOAD_URL = 'https://stream-upload.goofish.com/api/upload.api'
+
 
 class XianyuApis:
     def __init__(self):
@@ -317,3 +319,48 @@ class XianyuApis:
             logger.error(f"商品信息API请求异常: {str(e)}")
             time.sleep(0.5)
             return self.get_item_info(item_id, retry_count + 1)
+
+    def upload_media(self, image_path: str) -> dict:
+        """上传图片到闲鱼服务器，返回 {url, width, height}
+
+        Args:
+            image_path: 本地图片文件路径
+
+        Returns:
+            包含 url, width, height 的字典
+
+        Raises:
+            ValueError: 上传失败或响应格式异常时
+        """
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"图片文件不存在: {image_path}")
+
+        params = {
+            "floderId": "0",
+            "appkey": "xy_chat",
+            "_input_charset": "utf-8",
+        }
+
+        ext = os.path.splitext(image_path)[1].lower()
+        mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+        mime_type = mime_map.get(ext, "image/png")
+
+        with open(image_path, 'rb') as f:
+            files = {"file": (os.path.basename(image_path), f, mime_type)}
+            response = self.session.post(UPLOAD_URL, params=params, files=files)
+
+        result = response.json()
+
+        if "object" not in result:
+            error_msg = result.get("message", str(result))
+            raise ValueError(f"图片上传失败: {error_msg}")
+
+        obj = result["object"]
+        url = obj["url"]
+        pix = obj.get("pix", "0x0")
+        parts = pix.split("x")
+        width = int(parts[0]) if len(parts) >= 1 else 0
+        height = int(parts[1]) if len(parts) >= 2 else 0
+
+        logger.info(f"图片上传成功: {os.path.basename(image_path)} -> {url} ({width}x{height})")
+        return {"url": url, "width": width, "height": height}

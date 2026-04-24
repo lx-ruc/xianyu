@@ -1,5 +1,6 @@
 import re
-from typing import List, Dict
+import json
+from typing import List, Dict, Tuple
 import os
 from openai import OpenAI
 from loguru import logger
@@ -14,23 +15,29 @@ class XianyuReplyBot:
         )
         self._init_system_prompts()
         self._init_agents()
+        self._init_image_config()
         self.router = IntentRouter(self.agents['classify'])
         self.last_intent = None  # 记录最后一次意图
+        self._image_cache: Dict[str, dict] = {}  # image_id -> {url, width, height}
 
 
     def _init_agents(self):
         """初始化各领域Agent"""
+        image_suffix = self._build_image_prompt_suffix()
         self.agents = {
-            'classify':ClassifyAgent(self.client, self.classify_prompt, self._safe_filter),
+            'classify': ClassifyAgent(self.client, self.classify_prompt, self._safe_filter),
             'price': PriceAgent(self.client, self.price_prompt, self._safe_filter),
             'tech': TechAgent(self.client, self.tech_prompt, self._safe_filter),
             'default': DefaultAgent(self.client, self.default_prompt, self._safe_filter),
         }
+        # 为所有回复类Agent注入图片指令（分类Agent不需要）
+        for name in ('price', 'tech', 'default'):
+            self.agents[name].image_prompt_suffix = image_suffix
 
     def _init_system_prompts(self):
         """初始化各Agent专用提示词，优先加载用户自定义文件，否则使用Example默认文件"""
         prompt_dir = "prompts"
-        
+
         def load_prompt_content(name: str) -> str:
             """尝试加载提示词文件"""
             # 优先尝试加载 target.txt
@@ -55,11 +62,37 @@ class XianyuReplyBot:
             self.tech_prompt = load_prompt_content("tech_prompt")
             # 加载默认提示词
             self.default_prompt = load_prompt_content("default_prompt")
-                
+
             logger.info("成功加载所有提示词")
         except Exception as e:
             logger.error(f"加载提示词时出错: {e}")
             raise
+
+    def _init_image_config(self):
+        """加载图片配置"""
+        config_path = os.getenv("IMAGE_CONFIG_PATH", "image_config.json")
+        self.image_config: Dict[str, dict] = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for img in data.get("images", []):
+                    self.image_config[img["id"]] = img
+                logger.info(f"已加载 {len(self.image_config)} 张图片配置")
+            except Exception as e:
+                logger.warning(f"加载图片配置失败: {e}")
+
+    def _build_image_prompt_suffix(self) -> str:
+        """构建图片指令后缀，附加到Agent的system prompt中"""
+        if not self.image_config:
+            return ""
+        lines = ["\n\n【图片发送规则】"]
+        lines.append("如果你判断需要发送图片来增强说服力，在回复末尾添加 [IMG:图片id] 标记。")
+        lines.append("可选图片：")
+        for img_id, img_info in self.image_config.items():
+            lines.append(f"  - {img_id}: {img_info['description']}")
+        lines.append("规则：只在确实有助于回答时才发图，每次最多3张，不要每条消息都发图。")
+        return "\n".join(lines)
 
     def _safe_filter(self, text: str) -> str:
         """安全过滤模块"""
@@ -72,28 +105,30 @@ class XianyuReplyBot:
         user_assistant_msgs = [msg for msg in context if msg['role'] in ['user', 'assistant']]
         return "\n".join([f"{msg['role']}: {msg['content']}" for msg in user_assistant_msgs])
 
-    def generate_reply(self, user_msg: str, item_desc: str, context: List[Dict]) -> str:
-        """生成回复主流程"""
+    def generate_reply(self, user_msg: str, item_desc: str, context: List[Dict]) -> dict:
+        """生成回复主流程
+
+        Returns:
+            dict: {"text": "回复文本", "images": ["image_id1", "image_id2"]}
+                  或 {"text": "-", "images": []} 表示无需回复
+        """
         # 记录用户消息
         # logger.debug(f'用户所发消息: {user_msg}')
-        
+
         formatted_context = self.format_history(context)
         # logger.debug(f'对话历史: {formatted_context}')
-        
+
         # 1. 路由决策
         detected_intent = self.router.detect(user_msg, item_desc, formatted_context)
 
-
-
         # 2. 获取对应Agent
-
         internal_intents = {'classify'}  # 定义不对外开放的Agent
 
         if detected_intent == 'no_reply':
             # 无需回复的情况
             logger.info(f'意图识别完成: no_reply - 无需回复')
             self.last_intent = 'no_reply'
-            return "-"  # 返回特殊标记，表示无需回复
+            return {"text": "-", "images": []}
         elif detected_intent in self.agents and detected_intent not in internal_intents:
             agent = self.agents[detected_intent]
             logger.info(f'意图识别完成: {detected_intent}')
@@ -102,18 +137,34 @@ class XianyuReplyBot:
             agent = self.agents['default']
             logger.info(f'意图识别完成: default')
             self.last_intent = 'default'  # 保存当前意图
-        
+
         # 3. 获取议价次数
         bargain_count = self._extract_bargain_count(context)
         logger.info(f'议价次数: {bargain_count}')
 
         # 4. 生成回复
-        return agent.generate(
+        raw_reply = agent.generate(
             user_msg=user_msg,
             item_desc=item_desc,
             context=formatted_context,
             bargain_count=bargain_count
         )
+
+        # 5. 提取图片标记
+        text, image_ids = self._extract_image_tags(raw_reply)
+        return {"text": text, "images": image_ids}
+
+    @staticmethod
+    def _extract_image_tags(text: str) -> Tuple[str, List[str]]:
+        """从回复文本中提取 [IMG:id] 标记
+
+        Returns:
+            (cleaned_text, [image_id1, image_id2, ...])
+        """
+        pattern = r'\[IMG:(\w+)\]'
+        matches = re.findall(pattern, text)
+        cleaned = re.sub(pattern, '', text).strip()
+        return cleaned, matches
     
     def _extract_bargain_count(self, context: List[Dict]) -> int:
         """
@@ -205,6 +256,7 @@ class BaseAgent:
         self.client = client
         self.system_prompt = system_prompt
         self.safety_filter = safety_filter
+        self.image_prompt_suffix = ""  # 由 bot 注入
 
     def generate(self, user_msg: str, item_desc: str, context: str, bargain_count: int = 0) -> str:
         """生成回复模板方法"""
@@ -215,7 +267,7 @@ class BaseAgent:
     def _build_messages(self, user_msg: str, item_desc: str, context: str) -> List[Dict]:
         """构建消息链"""
         return [
-            {"role": "system", "content": f"【商品信息】{item_desc}\n【你与客户对话历史】{context}\n{self.system_prompt}"},
+            {"role": "system", "content": f"【商品信息】{item_desc}\n【你与客户对话历史】{context}\n{self.system_prompt}{self.image_prompt_suffix}"},
             {"role": "user", "content": user_msg}
         ]
 

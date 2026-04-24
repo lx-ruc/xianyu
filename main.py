@@ -155,6 +155,102 @@ class XianyuLive:
         }
         await ws.send(json.dumps(msg))
 
+    async def send_image_msg(self, ws, cid, toid, image_info: dict):
+        """发送图片消息
+
+        Args:
+            ws: WebSocket连接
+            cid: 会话ID
+            toid: 接收者ID
+            image_info: 包含 url, width, height 的字典
+        """
+        image_payload = {
+            "contentType": 2,
+            "image": {
+                "pics": [{
+                    "type": 0,
+                    "url": image_info["url"],
+                    "width": image_info["width"],
+                    "height": image_info["height"]
+                }]
+            }
+        }
+        payload_base64 = str(base64.b64encode(json.dumps(image_payload).encode('utf-8')), 'utf-8')
+        msg = {
+            "lwp": "/r/MessageSend/sendByReceiverScope",
+            "headers": {
+                "mid": generate_mid()
+            },
+            "body": [
+                {
+                    "uuid": generate_uuid(),
+                    "cid": f"{cid}@goofish",
+                    "conversationType": 1,
+                    "content": {
+                        "contentType": 101,
+                        "custom": {
+                            "type": 2,
+                            "data": payload_base64
+                        }
+                    },
+                    "redPointPolicy": 0,
+                    "extension": {
+                        "extJson": "{}"
+                    },
+                    "ctx": {
+                        "appVersion": "1.0",
+                        "platform": "web"
+                    },
+                    "mtags": {},
+                    "msgReadStatusSetting": 1
+                },
+                {
+                    "actualReceivers": [
+                        f"{toid}@goofish",
+                        f"{self.myid}@goofish"
+                    ]
+                }
+            ]
+        }
+        await ws.send(json.dumps(msg))
+        logger.info(f"图片消息已发送: {image_info['url'][:80]}...")
+
+    async def _send_images(self, ws, cid: str, toid: str, image_ids: list):
+        """上传并发送多张图片
+
+        Args:
+            ws: WebSocket连接
+            cid: 会话ID
+            toid: 接收者ID
+            image_ids: 要发送的图片ID列表
+        """
+        for image_id in image_ids[:3]:  # 最多3张
+            image_info = bot.image_config.get(image_id)
+            if not image_info:
+                logger.warning(f"未找到图片配置: {image_id}")
+                continue
+
+            file_path = image_info.get("file", "")
+            if not file_path or not os.path.exists(file_path):
+                logger.warning(f"图片文件不存在: {file_path}")
+                continue
+
+            try:
+                # 检查缓存
+                if image_id in bot._image_cache:
+                    upload_result = bot._image_cache[image_id]
+                    logger.info(f"使用缓存的图片: {image_id}")
+                else:
+                    # 上传图片
+                    upload_result = self.xianyu.upload_media(file_path)
+                    bot._image_cache[image_id] = upload_result
+
+                # 图片间间隔0.5-1秒，模拟人工操作
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+                await self.send_image_msg(ws, cid, toid, upload_result)
+            except Exception as e:
+                logger.error(f"发送图片 {image_id} 失败: {e}")
+
     async def init(self, ws):
         # 如果没有token或者token过期，获取新token
         if not self.current_token or (time.time() - self.last_token_refresh_time) >= self.token_refresh_interval:
@@ -508,31 +604,34 @@ class XianyuLive:
             # 获取完整的对话上下文
             context = self.context_manager.get_context_by_chat(chat_id)
             # 生成回复
-            bot_reply = bot.generate_reply(
+            reply_result = bot.generate_reply(
                 send_message,
                 item_description,
                 context=context
             )
-            
+
+            bot_reply = reply_result["text"]
+            image_ids = reply_result.get("images", [])
+
             # 检查是否需要回复
             if bot_reply == "-":
                 logger.info(f"[无需回复] 用户 {send_user_name} 的消息被识别为无需回复类型")
                 return
-            
+
             # 添加用户消息到上下文
             self.context_manager.add_message_by_chat(chat_id, send_user_id, item_id, "user", send_message)
-            
+
             # 检查是否为价格意图，如果是则增加议价次数
             if bot.last_intent == "price":
                 self.context_manager.increment_bargain_count_by_chat(chat_id)
                 bargain_count = self.context_manager.get_bargain_count_by_chat(chat_id)
                 logger.info(f"用户 {send_user_name} 对商品 {item_id} 的议价次数: {bargain_count}")
-            
+
             # 添加机器人回复到上下文
             self.context_manager.add_message_by_chat(chat_id, self.myid, item_id, "assistant", bot_reply)
-            
+
             logger.info(f"机器人回复: {bot_reply}")
-            
+
             # 模拟人工输入延迟
             if self.simulate_human_typing:
                 # 基础延迟 0-1秒 + 每字 0.1-0.3秒
@@ -541,11 +640,15 @@ class XianyuLive:
                 total_delay = base_delay + typing_delay
                 # 设置最大延迟上限，防止过长回复等待太久
                 total_delay = min(total_delay, 10.0)
-                
+
                 logger.info(f"模拟人工输入，延迟发送 {total_delay:.2f} 秒...")
                 await asyncio.sleep(total_delay)
-                
+
             await self.send_msg(websocket, chat_id, send_user_id, bot_reply)
+
+            # 发送图片消息
+            if image_ids:
+                await self._send_images(websocket, chat_id, send_user_id, image_ids)
             
         except Exception as e:
             logger.error(f"处理消息时发生错误: {str(e)}")
