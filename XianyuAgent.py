@@ -14,8 +14,8 @@ class XianyuReplyBot:
             base_url=os.getenv("MODEL_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         )
         self._init_system_prompts()
-        self._init_agents()
         self._init_image_config()
+        self._init_agents()
         self.router = IntentRouter(self.agents['classify'])
         self.last_intent = None  # 记录最后一次意图
         self._image_cache: Dict[str, dict] = {}  # image_id -> {url, width, height}
@@ -91,7 +91,7 @@ class XianyuReplyBot:
         lines.append("可选图片：")
         for img_id, img_info in self.image_config.items():
             lines.append(f"  - {img_id}: {img_info['description']}")
-        lines.append("规则：只在确实有助于回答时才发图，每次最多3张，不要每条消息都发图。")
+        lines.append("规则：只在确实有助于回答时才发图，每次只发1张，不要每条消息都发图。")
         return "\n".join(lines)
 
     def _safe_filter(self, text: str) -> str:

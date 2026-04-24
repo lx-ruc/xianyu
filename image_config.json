@@ -13,10 +13,22 @@
       "file": "images/outline.png"
     },
     {
-      "id": "feedback",
-      "description": "学员上岸反馈截图，展示真实学员好评和提分案例",
+      "id": "feedback1",
+      "description": "学员上岸反馈截图1",
       "keywords": ["效果", "靠谱吗", "有用吗", "上岸", "评价", "反馈", "好评", "口碑"],
-      "file": "images/feedback.png"
+      "file": "images/feedback1.png"
+    },
+    {
+      "id": "feedback2",
+      "description": "学员上岸反馈截图2",
+      "keywords": ["效果", "靠谱吗", "有用吗", "上岸", "评价", "反馈", "好评", "口碑"],
+      "file": "images/feedback2.png"
+    },
+    {
+      "id": "feedback3",
+      "description": "学员上岸反馈截图3",
+      "keywords": ["效果", "靠谱吗", "有用吗", "上岸", "评价", "反馈", "好评", "口碑"],
+      "file": "images/feedback3.png"
     }
   ]
 }

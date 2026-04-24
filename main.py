@@ -216,7 +216,7 @@ class XianyuLive:
         logger.info(f"图片消息已发送: {image_info['url'][:80]}...")
 
     async def _send_images(self, ws, cid: str, toid: str, image_ids: list):
-        """上传并发送多张图片
+        """上传并发送图片，每次最多1张，避免触发风控
 
         Args:
             ws: WebSocket连接
@@ -224,32 +224,37 @@ class XianyuLive:
             toid: 接收者ID
             image_ids: 要发送的图片ID列表
         """
-        for image_id in image_ids[:3]:  # 最多3张
-            image_info = bot.image_config.get(image_id)
-            if not image_info:
-                logger.warning(f"未找到图片配置: {image_id}")
-                continue
+        # 只发第一张，避免短时间内发多张图片触发风控
+        image_id = image_ids[0] if image_ids else None
+        if not image_id:
+            return
 
-            file_path = image_info.get("file", "")
-            if not file_path or not os.path.exists(file_path):
-                logger.warning(f"图片文件不存在: {file_path}")
-                continue
+        image_info = bot.image_config.get(image_id)
+        if not image_info:
+            logger.warning(f"未找到图片配置: {image_id}")
+            return
 
-            try:
-                # 检查缓存
-                if image_id in bot._image_cache:
-                    upload_result = bot._image_cache[image_id]
-                    logger.info(f"使用缓存的图片: {image_id}")
-                else:
-                    # 上传图片
-                    upload_result = self.xianyu.upload_media(file_path)
-                    bot._image_cache[image_id] = upload_result
+        file_path = image_info.get("file", "")
+        if not file_path or not os.path.exists(file_path):
+            logger.warning(f"图片文件不存在: {file_path}")
+            return
 
-                # 图片间间隔0.5-1秒，模拟人工操作
-                await asyncio.sleep(random.uniform(0.5, 1.0))
-                await self.send_image_msg(ws, cid, toid, upload_result)
-            except Exception as e:
-                logger.error(f"发送图片 {image_id} 失败: {e}")
+        try:
+            # 文本消息后等待3-5秒再发图片，模拟人工找图
+            await asyncio.sleep(random.uniform(3.0, 5.0))
+
+            # 检查缓存
+            if image_id in bot._image_cache:
+                upload_result = bot._image_cache[image_id]
+                logger.info(f"使用缓存的图片: {image_id}")
+            else:
+                # 上传图片
+                upload_result = self.xianyu.upload_media(file_path)
+                bot._image_cache[image_id] = upload_result
+
+            await self.send_image_msg(ws, cid, toid, upload_result)
+        except Exception as e:
+            logger.error(f"发送图片 {image_id} 失败: {e}")
 
     async def init(self, ws):
         # 如果没有token或者token过期，获取新token
