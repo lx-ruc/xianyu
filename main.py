@@ -9,11 +9,13 @@ from dotenv import load_dotenv, set_key
 from XianyuApis import XianyuApis
 import sys
 import random
+from datetime import datetime, timedelta
 
 
 from utils.xianyu_utils import generate_mid, generate_uuid, trans_cookies, generate_device_id, decrypt
 from XianyuAgent import XianyuReplyBot
 from context_manager import ChatContextManager
+from command_parser import CommandParser, HELP_TEXT
 
 
 class XianyuLive:
@@ -41,8 +43,9 @@ class XianyuLive:
         self.last_token_refresh_time = 0
         self.current_token = None
         self.token_refresh_task = None
+        self.bump_task = None
         self.connection_restart_flag = False  # 连接重启标志
-        
+
         # 人工接管相关配置
         self.manual_mode_conversations = set()  # 存储处于人工接管模式的会话ID
         self.manual_mode_timeout = int(os.getenv("MANUAL_MODE_TIMEOUT", "3600"))  # 人工接管超时时间，默认1小时
@@ -56,6 +59,11 @@ class XianyuLive:
         
         # 模拟人工输入配置
         self.simulate_human_typing = os.getenv("SIMULATE_HUMAN_TYPING", "False").lower() == "true"
+
+        # 指令解析器和管理员配置
+        self.command_parser = CommandParser()
+        admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
+        self.admin_user_ids = set(admin_ids_str.split(",")) if admin_ids_str else set()
 
     async def refresh_token(self):
         """刷新token"""
@@ -108,6 +116,72 @@ class XianyuLive:
             except Exception as e:
                 logger.error(f"Token刷新循环出错: {e}")
                 await asyncio.sleep(60)
+
+    async def bump_all_loop(self):
+        """每天随机时间（7:30~8:00）擦亮全部商品"""
+        while True:
+            try:
+                now = datetime.now()
+                # 计算今天7:30~8:00之间的随机时间
+                target_hour = 7
+                target_minute = random.randint(30, 59)
+                target_time = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+
+                # 如果今天的随机时间已过，安排到明天
+                if now >= target_time:
+                    target_time = target_time + timedelta(days=1)
+
+                wait_seconds = (target_time - now).total_seconds()
+                logger.info(f"下次擦亮时间: {target_time.strftime('%Y-%m-%d %H:%M')}, 等待 {wait_seconds/60:.0f} 分钟")
+
+                await asyncio.sleep(wait_seconds)
+
+                # 执行擦亮
+                logger.info("开始执行每日擦亮任务...")
+
+                # 分页获取所有商品
+                all_items = []
+                page = 1
+                while True:
+                    result = self.xianyu.list_my_items(page_number=page, page_size=20)
+                    card_list = result.get("data", {}).get("cardList", [])
+                    if not card_list:
+                        break
+                    all_items.extend(card_list)
+                    if len(card_list) < 20:
+                        break
+                    page += 1
+                    await asyncio.sleep(0.5)
+
+                if not all_items:
+                    logger.info("无在售商品，跳过擦亮")
+                    continue
+
+                success_count = 0
+                already_count = 0
+                fail_count = 0
+                for card in all_items:
+                    item_id = card.get("cardData", {}).get("id", "")
+                    if not item_id:
+                        continue
+                    bump_result = self.xianyu.republish_item(item_id)
+                    ret = str(bump_result.get("ret", []))
+                    if "SUCCESS" in ret:
+                        success_count += 1
+                    elif "POLISH_AGAIN" in ret:
+                        already_count += 1
+                    else:
+                        fail_count += 1
+                    await asyncio.sleep(random.uniform(1.5, 3.0))
+
+                logger.info(f"每日擦亮完成: 成功{success_count}, 已擦亮{already_count}, 失败{fail_count}")
+
+                # 等到明天再计算新的随机时间（避免重复执行）
+                await asyncio.sleep(3600)
+
+            except Exception as e:
+                logger.error(f"擦亮任务出错: {e}")
+                await asyncio.sleep(3600)
 
     async def send_msg(self, ws, cid, toid, text):
         text = {
@@ -555,23 +629,39 @@ class XianyuLive:
                 logger.warning("无法获取商品ID")
                 return
 
-            # 检查是否为卖家（自己）发送的控制命令
-            if send_user_id == self.myid:
-                logger.debug("检测到卖家消息，检查是否为控制命令")
-                
-                # 检查切换命令
-                if self.check_toggle_keywords(send_message):
-                    mode = self.toggle_manual_mode(chat_id)
-                    if mode == "manual":
-                        logger.info(f"🔴 已接管会话 {chat_id} (商品: {item_id})")
-                    else:
-                        logger.info(f"🟢 已恢复会话 {chat_id} 的自动回复 (商品: {item_id})")
+            # 检查是否为卖家或管理员发送的管理指令
+            is_admin = send_user_id in self.admin_user_ids
+            is_seller = send_user_id == self.myid
+
+            if is_seller or is_admin:
+                logger.debug(f"检测到{'管理员' if is_admin and not is_seller else '卖家'}消息，检查是否为控制命令")
+                logger.info(f"消息内容: {send_message}")
+
+                # 优先检查管理指令
+                parsed = self.command_parser.parse(send_message)
+                logger.info(f"指令解析结果: {parsed}")
+                if parsed:
+                    await self.handle_seller_command(parsed, websocket, chat_id)
                     return
-                
-                # 记录卖家人工回复
-                self.context_manager.add_message_by_chat(chat_id, self.myid, item_id, "assistant", send_message)
-                logger.info(f"卖家人工回复 (会话: {chat_id}, 商品: {item_id}): {send_message}")
-                return
+
+                # 管理员发的非指令消息，走正常的AI回复流程（不拦截）
+                if is_admin and not is_seller:
+                    pass  # 继续往下走到AI回复
+                else:
+                    # 卖家的非指令消息处理
+                    # 检查切换命令
+                    if self.check_toggle_keywords(send_message):
+                        mode = self.toggle_manual_mode(chat_id)
+                        if mode == "manual":
+                            logger.info(f"🔴 已接管会话 {chat_id} (商品: {item_id})")
+                        else:
+                            logger.info(f"🟢 已恢复会话 {chat_id} 的自动回复 (商品: {item_id})")
+                        return
+
+                    # 记录卖家人工回复
+                    self.context_manager.add_message_by_chat(chat_id, self.myid, item_id, "assistant", send_message)
+                    logger.info(f"卖家人工回复 (会话: {chat_id}, 商品: {item_id}): {send_message}")
+                    return
             
             logger.info(f"用户: {send_user_name} (ID: {send_user_id}), 商品: {item_id}, 会话: {chat_id}, 消息: {send_message}")
             
@@ -659,6 +749,118 @@ class XianyuLive:
             logger.error(f"处理消息时发生错误: {str(e)}")
             logger.debug(f"原始消息: {message_data}")
 
+    async def handle_seller_command(self, command, ws, chat_id: str):
+        """执行卖家管理指令并回复结果
+
+        Args:
+            command: 解析后的 Command 对象
+            ws: WebSocket连接
+            chat_id: 会话ID
+        """
+        name = command.name
+        args = command.args
+
+        try:
+            logger.info(f"执行指令: /{name}, 参数: {args}")
+
+            if name == "help":
+                reply = HELP_TEXT
+
+            elif name == "items":
+                reply = await self._cmd_items(args)
+
+            elif name == "bump":
+                reply = await self._cmd_bump(args)
+
+            elif name == "bumpall":
+                reply = await self._cmd_bumpall()
+
+            elif name == "search":
+                reply = await self._cmd_search(args)
+
+            else:
+                reply = f"未知指令: /{name}\n发送 /help 查看可用指令"
+
+            await self.send_msg(ws, chat_id, self.myid, reply)
+            logger.info(f"指令 /{name} 回复已发送")
+
+        except Exception as e:
+            logger.error(f"执行指令 /{name} 失败: {e}")
+            await self.send_msg(ws, chat_id, self.myid, f"指令执行失败: {e}")
+
+    # ========== 指令处理方法 ==========
+
+    async def _cmd_items(self, args: dict) -> str:
+        """处理 /items 指令"""
+        page = args.get("page", 1)
+        result = self.xianyu.list_my_items(page_number=page)
+
+        if "error" in result:
+            return f"获取商品列表失败: {result.get('error', '未知错误')}"
+
+        data = result.get("data", {})
+        card_list = data.get("cardList", [])
+        if not card_list:
+            return "暂无在售商品" if page == 1 else f"第{page}页没有商品"
+
+        lines = [f"商品列表 (第{page}页):"]
+        for i, card in enumerate(card_list, 1):
+            cd = card.get("cardData", {})
+            dp = cd.get("detailParams", {})
+            title = dp.get("title", "未知商品")
+            item_id = cd.get("id", "")
+            price = dp.get("soldPrice", "?")
+            lines.append(f"{i}. [{item_id}] {title} - ¥{price}")
+
+        total = data.get("totalCount", len(card_list))
+        lines.append(f"\n共 {total} 件商品，发送 /items {page + 1} 查看下一页")
+        return "\n".join(lines)
+
+    async def _cmd_bump(self, args: dict) -> str:
+        """处理 /bump 指令"""
+        item_id = args.get("item_id", "")
+        if not item_id:
+            return "用法: /bump <商品ID>"
+
+        result = self.xianyu.republish_item(item_id)
+        if "error" in result:
+            return f"擦亮失败: {result.get('error', '未知错误')}"
+
+        ret = result.get("ret", [])
+        if any("SUCCESS" in r for r in ret):
+            return f"擦亮成功: {item_id}"
+        return f"擦亮失败: {ret}"
+
+    async def _cmd_bumpall(self) -> str:
+        """处理 /bumpall 指令"""
+        result = self.xianyu.list_my_items(page_number=1, page_size=50)
+        if "error" in result:
+            return f"获取商品列表失败: {result.get('error', '未知错误')}"
+
+        items = result.get("data", {}).get("resultList", [])
+        if not items:
+            return "暂无在售商品"
+
+        success_count = 0
+        fail_count = 0
+        for item in items:
+            item_id = item.get("itemId", "")
+            if not item_id:
+                continue
+            try:
+                bump_result = self.xianyu.republish_item(item_id)
+                ret = bump_result.get("ret", [])
+                if any("SUCCESS" in r for r in ret):
+                    success_count += 1
+                else:
+                    fail_count += 1
+                # 间隔1-2秒避免风控
+                await asyncio.sleep(random.uniform(1.0, 2.0))
+            except Exception:
+                fail_count += 1
+
+        return f"擦亮完成: 成功{success_count}件, 失败{fail_count}件"
+
     async def send_heartbeat(self, ws):
         """发送心跳包并等待响应"""
         try:
@@ -745,6 +947,9 @@ class XianyuLive:
                     
                     # 启动token刷新任务
                     self.token_refresh_task = asyncio.create_task(self.token_refresh_loop())
+
+                    # 启动每日擦亮任务
+                    self.bump_task = asyncio.create_task(self.bump_all_loop())
                     
                     async for message in websocket:
                         try:

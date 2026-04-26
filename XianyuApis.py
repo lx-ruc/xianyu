@@ -1,3 +1,4 @@
+import json
 import time
 import os
 import re
@@ -8,6 +9,7 @@ from loguru import logger
 from utils.xianyu_utils import generate_sign
 
 UPLOAD_URL = 'https://stream-upload.goofish.com/api/upload.api'
+MTOP_BASE_URL = 'https://h5api.m.goofish.com/h5'
 
 
 class XianyuApis:
@@ -31,6 +33,99 @@ class XianyuApis:
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
         })
         
+    def _call_mtop_api(
+        self,
+        api_name: str,
+        version: str,
+        data_val: str,
+        retry_count: int = 0,
+        max_retries: int = 3,
+        extra_params: dict | None = None,
+    ) -> dict:
+        """通用 MTOP API 调用方法
+
+        Args:
+            api_name: API名称，如 mtop.taobao.idle.pc.detail
+            version: API版本，如 1.0
+            data_val: JSON字符串格式的请求数据
+            retry_count: 当前重试次数
+            max_retries: 最大重试次数
+            extra_params: 额外的URL参数
+
+        Returns:
+            API响应的JSON字典
+        """
+        if retry_count >= max_retries:
+            logger.error(f"MTOP API 调用失败，重试次数过多: {api_name}")
+            return {"error": f"MTOP API 调用失败: {api_name}"}
+
+        params = {
+            'jsv': '2.7.2',
+            'appKey': '34839810',
+            't': str(int(time.time()) * 1000),
+            'sign': '',
+            'v': version,
+            'type': 'originaljson',
+            'accountSite': 'xianyu',
+            'dataType': 'json',
+            'timeout': '20000',
+            'api': api_name,
+            'sessionOption': 'AutoLoginOnly',
+            'spm_cnt': 'a21ybx.im.0.0',
+        }
+        if extra_params:
+            params.update(extra_params)
+
+        data = {'data': data_val}
+
+        token = self.session.cookies.get('_m_h5_tk', '').split('_')[0]
+        sign = generate_sign(params['t'], token, data_val)
+        params['sign'] = sign
+
+        try:
+            url = f"{MTOP_BASE_URL}/{api_name}/{version}/"
+            response = self.session.post(url, params=params, data=data)
+            res_json = response.json()
+
+            if not isinstance(res_json, dict):
+                logger.error(f"API返回格式异常: {res_json}")
+                return self._call_mtop_api(api_name, version, data_val, retry_count + 1, max_retries, extra_params)
+
+            ret_value = res_json.get('ret', [])
+            if not any('SUCCESS' in ret for ret in ret_value):
+                error_msg = str(ret_value)
+
+                # 风控处理
+                if 'RGV587_ERROR' in error_msg or '被挤爆啦' in error_msg:
+                    logger.error(f"触发风控: {ret_value}")
+                    print("\n" + "=" * 50)
+                    new_cookie_str = input("请输入新的Cookie字符串 (直接回车退出): ").strip()
+                    print("=" * 50 + "\n")
+                    if new_cookie_str:
+                        from http.cookies import SimpleCookie
+                        cookie = SimpleCookie()
+                        cookie.load(new_cookie_str)
+                        self.session.cookies.clear()
+                        for key, morsel in cookie.items():
+                            self.session.cookies.set(key, morsel.value, domain='.goofish.com')
+                        self.update_env_cookies()
+                        return self._call_mtop_api(api_name, version, data_val, 0, max_retries, extra_params)
+                    else:
+                        sys.exit(1)
+
+                logger.warning(f"API调用失败 [{api_name}]: {ret_value}")
+                if 'Set-Cookie' in response.headers:
+                    self.clear_duplicate_cookies()
+                time.sleep(0.5)
+                return self._call_mtop_api(api_name, version, data_val, retry_count + 1, max_retries, extra_params)
+
+            return res_json
+
+        except Exception as e:
+            logger.error(f"API请求异常 [{api_name}]: {e}")
+            time.sleep(0.5)
+            return self._call_mtop_api(api_name, version, data_val, retry_count + 1, max_retries, extra_params)
+
     def clear_duplicate_cookies(self):
         """清理重复的cookies"""
         # 创建一个新的CookieJar
@@ -256,69 +351,56 @@ class XianyuApis:
             time.sleep(0.5)
             return self.get_token(device_id, retry_count + 1)
 
-    def get_item_info(self, item_id, retry_count=0):
-        """获取商品信息，自动处理token失效的情况"""
-        if retry_count >= 3:  # 最多重试3次
-            logger.error("获取商品信息失败，重试次数过多")
-            return {"error": "获取商品信息失败，重试次数过多"}
-            
-        params = {
-            'jsv': '2.7.2',
-            'appKey': '34839810',
-            't': str(int(time.time()) * 1000),
-            'sign': '',
-            'v': '1.0',
-            'type': 'originaljson',
-            'accountSite': 'xianyu',
-            'dataType': 'json',
-            'timeout': '20000',
-            'api': 'mtop.taobao.idle.pc.detail',
-            'sessionOption': 'AutoLoginOnly',
-            'spm_cnt': 'a21ybx.im.0.0',
-        }
-        
-        data_val = '{"itemId":"' + item_id + '"}'
-        data = {
-            'data': data_val,
-        }
-        
-        # 简单获取token，信任cookies已清理干净
-        token = self.session.cookies.get('_m_h5_tk', '').split('_')[0]
-        
-        sign = generate_sign(params['t'], token, data_val)
-        params['sign'] = sign
-        
-        try:
-            response = self.session.post(
-                'https://h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail/1.0/', 
-                params=params, 
-                data=data
-            )
-            
-            res_json = response.json()
-            # 检查返回状态
-            if isinstance(res_json, dict):
-                ret_value = res_json.get('ret', [])
-                # 检查ret是否包含成功信息
-                if not any('SUCCESS::调用成功' in ret for ret in ret_value):
-                    logger.warning(f"商品信息API调用失败，错误信息: {ret_value}")
-                    # 处理响应中的Set-Cookie
-                    if 'Set-Cookie' in response.headers:
-                        logger.debug("检测到Set-Cookie，更新cookie")
-                        self.clear_duplicate_cookies()
-                    time.sleep(0.5)
-                    return self.get_item_info(item_id, retry_count + 1)
-                else:
-                    logger.debug(f"商品信息获取成功: {item_id}")
-                    return res_json
-            else:
-                logger.error(f"商品信息API返回格式异常: {res_json}")
-                return self.get_item_info(item_id, retry_count + 1)
-                
-        except Exception as e:
-            logger.error(f"商品信息API请求异常: {str(e)}")
-            time.sleep(0.5)
-            return self.get_item_info(item_id, retry_count + 1)
+    def get_item_info(self, item_id: str, retry_count: int = 0) -> dict:
+        """获取商品信息"""
+        data_val = json.dumps({"itemId": item_id})
+        return self._call_mtop_api("mtop.taobao.idle.pc.detail", "1.0", data_val, retry_count=retry_count, max_retries=3)
+
+    # ========== 商品管理 API ==========
+
+    def list_my_items(self, page_number: int = 1, page_size: int = 20) -> dict:
+        """获取我发布的商品列表
+
+        Args:
+            page_number: 页码，从1开始
+            page_size: 每页数量
+        """
+        data_val = json.dumps({
+            "needGroupInfo": False,
+            "pageNumber": page_number,
+            "userId": self.session.cookies.get("unb", ""),
+            "pageSize": page_size,
+        })
+        return self._call_mtop_api(
+            "mtop.idle.web.xyh.item.list", "1.0", data_val,
+            extra_params={"spm_pre": "a21ybx.home.nav.1"},
+        )
+
+    def republish_item(self, item_id: str) -> dict:
+        """擦亮/重新发布商品，提升曝光
+
+        Args:
+            item_id: 商品ID
+        """
+        data_val = json.dumps({"itemId": item_id})
+        return self._call_mtop_api("mtop.taobao.idle.item.polish", "1.0", data_val)
+
+    def search_items(self, keyword: str) -> dict:
+        """搜索市场商品
+
+        Args:
+            keyword: 搜索关键词
+        """
+        data_val = json.dumps({
+            "inputWords": keyword,
+            "searchReqFromPage": "xyPcHome",
+            "bucketId": 30,
+            "type": 0,
+        })
+        return self._call_mtop_api(
+            "mtop.taobao.idlemtopsearch.pc.search.suggest", "1.0", data_val,
+            extra_params={"spm_pre": "a21ybx.home.searchInput.0"},
+        )
 
     def upload_media(self, image_path: str) -> dict:
         """上传图片到闲鱼服务器，返回 {url, width, height}

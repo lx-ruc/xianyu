@@ -91,6 +91,40 @@ class ChatContextManager:
         conn.commit()
         conn.close()
         logger.info(f"聊天历史数据库初始化完成: {self.db_path}")
+
+    def _ensure_analytics_tables(self, conn):
+        """确保分析和日志表存在"""
+        cursor = conn.cursor()
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS item_analytics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id TEXT NOT NULL,
+            views INTEGER DEFAULT 0,
+            inquiries INTEGER DEFAULT 0,
+            favorites INTEGER DEFAULT 0,
+            shares INTEGER DEFAULT 0,
+            snapshot_time DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+
+        cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_analytics_item_time
+        ON item_analytics (item_id, snapshot_time)
+        ''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS command_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            command TEXT NOT NULL,
+            args TEXT,
+            result TEXT,
+            success INTEGER DEFAULT 0,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+
+        conn.commit()
         
 
             
@@ -305,5 +339,77 @@ class ChatContextManager:
         except Exception as e:
             logger.error(f"获取议价次数时出错: {e}")
             return 0
+        finally:
+            conn.close()
+
+    # ========== 数据分析与指令日志 ==========
+
+    def save_analytics_snapshot(self, item_id: str, views: int = 0,
+                                inquiries: int = 0, favorites: int = 0,
+                                shares: int = 0) -> None:
+        """保存商品数据快照，用于趋势分析"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            self._ensure_analytics_tables(conn)
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO item_analytics (item_id, views, inquiries, favorites, shares, snapshot_time) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (item_id, views, inquiries, favorites, shares, datetime.now().isoformat()),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.error(f"保存数据快照出错: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
+
+    def get_analytics_trend(self, item_id: str, hours: int = 24) -> list:
+        """查询商品数据趋势
+
+        Returns:
+            list of dict: [{snapshot_time, views, inquiries, favorites, shares}, ...]
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            self._ensure_analytics_tables(conn)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT views, inquiries, favorites, shares, snapshot_time "
+                "FROM item_analytics WHERE item_id = ? "
+                "AND snapshot_time >= datetime('now', ?) "
+                "ORDER BY snapshot_time ASC",
+                (item_id, f"-{hours} hours"),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "views": r[0], "inquiries": r[1],
+                    "favorites": r[2], "shares": r[3],
+                    "snapshot_time": r[4],
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error(f"查询数据趋势出错: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def log_command(self, command: str, args: str, result: str, success: bool) -> None:
+        """记录指令执行日志"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            self._ensure_analytics_tables(conn)
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO command_log (command, args, result, success, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (command, args, result, int(success), datetime.now().isoformat()),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.error(f"记录指令日志出错: {e}")
+            conn.rollback()
         finally:
             conn.close() 
