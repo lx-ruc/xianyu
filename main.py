@@ -672,6 +672,10 @@ class XianyuLive:
                 # 添加用户消息到上下文
                 self.context_manager.add_message_by_chat(chat_id, send_user_id, item_id, "user", send_message)
                 return
+            # 忽略普通用户发送的 / 指令（避免触发AI回复）
+            if send_message.startswith("/"):
+                logger.info(f"忽略用户发送的指令: {send_message}")
+                return
             # 检查是否为带中括号的系统消息
             if self.is_bracket_system_message(send_message):
                 logger.info(f"检测到系统消息：'{send_message}'，跳过自动回复")
