@@ -1,0 +1,218 @@
+[
+  {
+    "api": "mtop.taobao.idlemtopsearch.pc.search.suggest",
+    "data": {
+      "bucketId": 30,
+      "ext": {
+        "styleType": "1"
+      },
+      "items": [
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数学"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数学张宇"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数二"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数学一"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数一"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数据"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数学武忠祥"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数学资料"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数据库择校"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "e65199db647484490ed392458f0092a7",
+          "suggest": "考研数学660基础"
+        }
+      ],
+      "needDecryptKeys": [
+        "trackParams.user_nick"
+      ],
+      "nextPage": false,
+      "serverTime": "2026-04-27 16:40:53",
+      "showStaticUserSearch": false,
+      "toBuy": false,
+      "totalCount": 10,
+      "trackParams": {
+        "bucket_id": "30",
+        "app_version": null
+      }
+    },
+    "ret": [
+      "SUCCESS::调用成功"
+    ],
+    "traceId": "215045dd17772792535236499e1203",
+    "v": "1.0"
+  },
+  {
+    "api": "mtop.taobao.idlemtopsearch.pc.search.suggest",
+    "data": {
+      "bucketId": 30,
+      "ext": {
+        "styleType": "1"
+      },
+      "items": [
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "9570b32093f31154d55a06f07aaad273",
+          "suggest": "考研数学辅助"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "9570b32093f31154d55a06f07aaad273",
+          "suggest": "考研数学辅助讲义"
+        }
+      ],
+      "needDecryptKeys": [
+        "trackParams.user_nick"
+      ],
+      "nextPage": false,
+      "serverTime": "2026-04-27 16:40:53",
+      "showStaticUserSearch": false,
+      "toBuy": false,
+      "totalCount": 2,
+      "trackParams": {
+        "bucket_id": "30",
+        "app_version": null
+      }
+    },
+    "ret": [
+      "SUCCESS::调用成功"
+    ],
+    "traceId": "215045dd17772792536316505e1203",
+    "v": "1.0"
+  },
+  {
+    "api": "mtop.taobao.idlemtopsearch.pc.search.suggest",
+    "data": {
+      "bucketId": 30,
+      "ext": {
+        "styleType": "1"
+      },
+      "items": [
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学张宇"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学一"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学武忠祥"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学资料"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学660基础"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学660题"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学2"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学笔记"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学660"
+        },
+        {
+          "bucketNum": 30,
+          "preTitleIcon": "https://gw.alicdn.com/imgextra/i2/O1CN0114ZRc51xoTD9e8uqX_!!6000000006490-2-tps-60-60.png",
+          "rn": "5573f23f239a5d4b53d2059665ed3e61",
+          "suggest": "考研数学张宇基础30讲"
+        }
+      ],
+      "needDecryptKeys": [
+        "trackParams.user_nick"
+      ],
+      "nextPage": false,
+      "serverTime": "2026-04-27 16:40:53",
+      "showStaticUserSearch": false,
+      "toBuy": false,
+      "totalCount": 10,
+      "trackParams": {
+        "bucket_id": "30",
+        "app_version": null
+      }
+    },
+    "ret": [
+      "SUCCESS::调用成功"
+    ],
+    "traceId": "2150451a17772792535785589e0fed",
+    "v": "1.0"
+  }
+]
