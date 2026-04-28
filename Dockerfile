@@ -1,31 +1,36 @@
+# Stage 1: Build frontend
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json* ./
+RUN npm install
+COPY web/ ./
+RUN npm run build
+
+# Stage 2: Build Python deps
 FROM python:3.10-alpine AS builder
 
 WORKDIR /app
 
-# 只安装构建所需的依赖
 RUN apk add --no-cache --virtual .build-deps \
     gcc \
     musl-dev \
     libffi-dev \
     build-base
 
-# 创建虚拟环境并安装依赖
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# 复制依赖文件并安装
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 第二阶段：最终镜像
+# Stage 3: Final image
 FROM python:3.10-alpine
 
-# 添加元数据标签
 LABEL maintainer="coderxiu<coderxiu@qq.com>"
-LABEL description="闲鱼AI客服机器人"
-LABEL version="2.0"
+LABEL description="闲鱼AI客服机器人 + Web管理界面"
+LABEL version="3.0"
 
-# 设置时区和编码
 ENV TZ=Asia/Shanghai \
     PYTHONIOENCODING=utf-8 \
     LANG=C.UTF-8 \
@@ -33,32 +38,29 @@ ENV TZ=Asia/Shanghai \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# 只安装运行时必要的包
-RUN apk add --no-cache \
-    tzdata \
+RUN apk add --no-cache tzdata \
     && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
-    && echo Asia/Shanghai > /etc/timezone \
-    # 清理apk缓存
+    && echo Asia/Shanghai > /etc/localtime \
     && rm -rf /var/cache/apk/*
 
-# 设置工作目录
 WORKDIR /app
 
-# 从构建阶段复制虚拟环境
 COPY --from=builder /opt/venv /opt/venv
 
-# 创建必要的目录
+# Copy frontend build output
+COPY --from=frontend-builder /app/web/dist /app/web/dist
+
 RUN mkdir -p data prompts
 
-# 复制示例提示词文件并重命名为正式文件
 COPY prompts/classify_prompt_example.txt prompts/classify_prompt.txt
 COPY prompts/price_prompt_example.txt prompts/price_prompt.txt
 COPY prompts/tech_prompt_example.txt prompts/tech_prompt.txt
 COPY prompts/default_prompt_example.txt prompts/default_prompt.txt
 
-# 只复制绝对必要的文件
-COPY main.py XianyuAgent.py XianyuApis.py context_manager.py ./
+COPY main.py XianyuAgent.py XianyuApis.py context_manager.py command_parser.py ./
 COPY utils/ utils/
+COPY server/ server/
 
-# 容器启动时运行的命令
-CMD ["python", "main.py"]
+EXPOSE 8000
+
+CMD ["python", "main.py", "--host", "0.0.0.0", "--port", "8000"]

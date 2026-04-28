@@ -50,4 +50,9 @@ htmlcov/
 .tox/
 .nox/
 .hypothesis/
-.coverage.* 
+.coverage.*
+
+# Node.js / Frontend
+web/node_modules/
+web/dist/
+web/.vite/ 

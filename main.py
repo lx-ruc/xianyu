@@ -45,6 +45,7 @@ class XianyuLive:
         self.token_refresh_task = None
         self.bump_task = None
         self.connection_restart_flag = False  # 连接重启标志
+        self._stop_requested = False  # 主动停止标志
 
         # 人工接管相关配置
         self.manual_mode_conversations = set()  # 存储处于人工接管模式的会话ID
@@ -64,6 +65,9 @@ class XianyuLive:
         self.command_parser = CommandParser()
         admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
         self.admin_user_ids = set(admin_ids_str.split(",")) if admin_ids_str else set()
+
+        # EventBus for Web UI (set externally by main.py)
+        self.event_bus = None
 
     async def refresh_token(self):
         """刷新token"""
@@ -470,10 +474,17 @@ class XianyuLive:
         """切换人工接管模式"""
         if self.is_manual_mode(chat_id):
             self.exit_manual_mode(chat_id)
+            self._publish_event("mode_change", {"chat_id": chat_id, "mode": "auto"})
             return "auto"
         else:
             self.enter_manual_mode(chat_id)
+            self._publish_event("mode_change", {"chat_id": chat_id, "mode": "manual"})
             return "manual"
+
+    def _publish_event(self, channel: str, data: dict) -> None:
+        """Publish event to EventBus if available."""
+        if self.event_bus:
+            self.event_bus.publish(channel, data)
     
     def format_price(self, price):
         """
@@ -664,6 +675,17 @@ class XianyuLive:
                     return
             
             logger.info(f"用户: {send_user_name} (ID: {send_user_id}), 商品: {item_id}, 会话: {chat_id}, 消息: {send_message}")
+
+            # Publish user message event for Web UI
+            self._publish_event("chat_message", {
+                "type": "user_message",
+                "chat_id": chat_id,
+                "user_id": send_user_id,
+                "user_name": send_user_name,
+                "item_id": item_id,
+                "content": send_message,
+                "timestamp": datetime.now().isoformat(),
+            })
             
             
             # 如果当前会话处于人工接管模式，不进行自动回复
@@ -730,6 +752,15 @@ class XianyuLive:
             self.context_manager.add_message_by_chat(chat_id, self.myid, item_id, "assistant", bot_reply)
 
             logger.info(f"机器人回复: {bot_reply}")
+
+            # Publish bot reply event for Web UI
+            self._publish_event("chat_message", {
+                "type": "bot_reply",
+                "chat_id": chat_id,
+                "content": bot_reply,
+                "agent_type": bot.last_intent or "default",
+                "timestamp": datetime.now().isoformat(),
+            })
 
             # 模拟人工输入延迟
             if self.simulate_human_typing:
@@ -922,6 +953,10 @@ class XianyuLive:
 
     async def main(self):
         while True:
+            if self._stop_requested:
+                logger.info("Bot 已收到停止信号，退出主循环")
+                self.ws = None
+                return
             try:
                 # 重置连接重启标志
                 self.connection_restart_flag = False
@@ -1017,9 +1052,27 @@ class XianyuLive:
                 # 如果是主动重启，立即重连；否则等待5秒
                 if self.connection_restart_flag:
                     logger.info("主动重启连接，立即重连...")
+                elif self._stop_requested:
+                    logger.info("Bot 已停止，不再重连")
+                    self.ws = None
+                    return
                 else:
                     logger.info("等待5秒后重连...")
                     await asyncio.sleep(5)
+
+    def request_stop(self):
+        """请求停止 bot（从外部调用）"""
+        self._stop_requested = True
+        if self.ws:
+            asyncio.create_task(self._close_ws())
+
+    async def _close_ws(self):
+        """关闭 websocket 连接"""
+        try:
+            await self.ws.close()
+        except Exception:
+            pass
+        self.ws = None
 
 
 
@@ -1066,15 +1119,23 @@ def check_and_complete_env():
 
 
 if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description="XianyuAutoAgent")
+    parser.add_argument("--no-web", action="store_true", help="跳过 Web 界面，仅运行 bot")
+    parser.add_argument("--host", default="0.0.0.0", help="Web 服务监听地址")
+    parser.add_argument("--port", type=int, default=8000, help="Web 服务监听端口")
+    args = parser.parse_args()
+
     # 加载环境变量
     if os.path.exists(".env"):
         load_dotenv()
         logger.info("已加载 .env 配置")
-    
+
     if os.path.exists(".env.example"):
         load_dotenv(".env.example")  # 不会覆盖已存在的变量
         logger.info("已加载 .env.example 默认配置")
-    
+
     # 配置日志级别
     log_level = os.getenv("LOG_LEVEL", "DEBUG").upper()
     logger.remove()  # 移除默认handler
@@ -1084,12 +1145,37 @@ if __name__ == '__main__':
         format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
     )
     logger.info(f"日志级别设置为: {log_level}")
-    
+
     # 交互式检查并补全配置
     check_and_complete_env()
-    
+
     cookies_str = os.getenv("COOKIES_STR")
     bot = XianyuReplyBot()
     xianyuLive = XianyuLive(cookies_str)
-    # 常驻进程
-    asyncio.run(xianyuLive.main())
+
+    if args.no_web:
+        # 纯 bot 模式（原有行为）
+        logger.info("以纯 bot 模式启动（无 Web 界面）")
+        asyncio.run(xianyuLive.main())
+    else:
+        # Web + Bot 模式
+        import uvicorn
+        from server import create_app
+        from server.state import StateBridge, create_log_sink
+
+        # 添加日志 sink 推送到 EventBus
+        bridge = StateBridge()
+        bridge.set_bot(xianyuLive)
+        xianyuLive.event_bus = bridge.event_bus  # Allow bot to publish events
+        logger.add(create_log_sink(bridge.event_bus), level=log_level)
+
+        app = create_app(bridge)
+
+        # Start bot as background task inside uvicorn's event loop
+        @app.on_event("startup")
+        async def start_bot():
+            asyncio.create_task(xianyuLive.main())
+            logger.info("Bot 后台任务已启动")
+
+        logger.info(f"Web 管理界面启动: http://{args.host}:{args.port}")
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
