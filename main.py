@@ -61,6 +61,13 @@ class XianyuLive:
         # 模拟人工输入配置
         self.simulate_human_typing = os.getenv("SIMULATE_HUMAN_TYPING", "False").lower() == "true"
 
+        # 自动发货配置
+        self.auto_delivery = os.getenv("AUTO_DELIVERY", "false").lower() == "true"
+
+        # 自动好评配置
+        self.auto_rate = os.getenv("AUTO_RATE", "false").lower() == "true"
+        self.rate_content = os.getenv("RATE_CONTENT", "好买家，交易愉快")
+
         # 指令解析器和管理员配置
         self.command_parser = CommandParser()
         admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
@@ -539,6 +546,84 @@ class XianyuLive:
 
         return json.dumps(summary, ensure_ascii=False)
 
+    async def _handle_auto_delivery(self, user_id: str, biz_order_id: str) -> None:
+        """处理自动虚拟发货
+
+        Args:
+            user_id: 买家用户ID
+            biz_order_id: 订单ID
+        """
+        if not biz_order_id:
+            logger.warning("自动发货跳过: 无法提取订单ID，请检查日志中的完整消息结构")
+            return
+
+        # 记录订单到数据库
+        self.context_manager.save_order(biz_order_id, user_id, status="pending")
+
+        if not self.auto_delivery:
+            logger.info(f"自动发货未开启 (AUTO_DELIVERY=false)，订单 {biz_order_id} 等待手动处理")
+            return
+
+        logger.info(f"自动发货开始: 订单 {biz_order_id}, 买家 {user_id}")
+        result = self.xianyu.virtual_delivery(biz_order_id)
+        ret = str(result.get('ret', []))
+
+        if 'SUCCESS' in ret:
+            logger.info(f'自动发货成功: 订单 {biz_order_id}')
+            self.context_manager.save_order(
+                biz_order_id, user_id, status="delivered", delivery_result=ret,
+            )
+            if self.event_bus:
+                await self.event_bus.emit("order_delivered", {
+                    "biz_order_id": biz_order_id,
+                    "user_id": user_id,
+                    "status": "delivered",
+                })
+        else:
+            logger.error(f'自动发货失败: 订单 {biz_order_id}, 返回: {ret}')
+            self.context_manager.save_order(
+                biz_order_id, user_id, status="failed", delivery_result=ret,
+            )
+
+    async def _handle_auto_rate(self, user_id: str, biz_order_id: str) -> None:
+        """处理自动好评（卖家评价买家）
+
+        Args:
+            user_id: 买家用户ID
+            biz_order_id: 订单ID
+        """
+        if not biz_order_id:
+            logger.warning("自动好评跳过: 无法提取订单ID")
+            return
+
+        # 确保订单记录存在
+        self.context_manager.save_order(biz_order_id, user_id, status="delivered")
+
+        if not self.auto_rate:
+            logger.info(f"自动好评未开启 (AUTO_RATE=false)，订单 {biz_order_id} 等待手动评价")
+            return
+
+        logger.info(f"自动好评开始: 订单 {biz_order_id}, 买家 {user_id}")
+        result = self.xianyu.rate_buyer(biz_order_id, self.rate_content)
+        ret = str(result.get('ret', []))
+
+        if 'SUCCESS' in ret:
+            logger.info(f'自动好评成功: 订单 {biz_order_id}')
+            self.context_manager.save_order(
+                biz_order_id, user_id, status="rated", delivery_result=ret,
+            )
+            if self.event_bus:
+                await self.event_bus.emit("order_rated", {
+                    "biz_order_id": biz_order_id,
+                    "user_id": user_id,
+                    "status": "rated",
+                })
+        else:
+            logger.error(f'自动好评失败: 订单 {biz_order_id}, 返回: {ret}')
+            self.context_manager.save_order(
+                biz_order_id, user_id, status="rate_failed", delivery_result=ret,
+            )
+
     async def handle_message(self, message_data, websocket):
         """处理所有类型的消息"""
         try:
@@ -591,22 +676,34 @@ class XianyuLive:
                 return
 
             try:
-                # 判断是否为订单消息,需要自行编写付款后的逻辑
-                if message['3']['redReminder'] == '等待买家付款':
-                    user_id = message['1'].split('@')[0]
-                    user_url = f'https://www.goofish.com/personal?userId={user_id}'
-                    logger.info(f'等待买家 {user_url} 付款')
-                    return
-                elif message['3']['redReminder'] == '交易关闭':
-                    user_id = message['1'].split('@')[0]
-                    user_url = f'https://www.goofish.com/personal?userId={user_id}'
-                    logger.info(f'买家 {user_url} 交易关闭')
-                    return
-                elif message['3']['redReminder'] == '等待卖家发货':
-                    user_id = message['1'].split('@')[0]
-                    user_url = f'https://www.goofish.com/personal?userId={user_id}'
-                    logger.info(f'交易成功 {user_url} 等待卖家发货')
-                    return
+                # 订单消息处理
+                red_reminder = message['3'].get('redReminder', '')
+                order_states = ('等待买家付款', '交易关闭', '等待卖家发货', '交易完成', '交易成功')
+                if red_reminder in order_states:
+                    user_id = message['1'].split('@')[0] if isinstance(message['1'], str) else ''
+                    # 提取订单ID：尝试多个可能的字段位置
+                    biz_order_id = (
+                        message['3'].get('bizOrderId', '')
+                        or message['3'].get('orderId', '')
+                        or message.get('4', '')
+                    )
+                    # Debug 日志：记录完整消息结构以便调试
+                    logger.debug(f"订单消息完整内容: {json.dumps(message, ensure_ascii=False)[:500]}")
+
+                    if red_reminder == '等待买家付款':
+                        logger.info(f'等待买家 {user_id} 付款, 订单={biz_order_id}')
+                        return
+                    elif red_reminder == '交易关闭':
+                        logger.info(f'买家 {user_id} 交易关闭, 订单={biz_order_id}')
+                        return
+                    elif red_reminder == '等待卖家发货':
+                        logger.info(f'交易成功 {user_id} 等待卖家发货, 订单={biz_order_id}')
+                        await self._handle_auto_delivery(user_id, biz_order_id)
+                        return
+                    elif red_reminder in ('交易完成', '交易成功'):
+                        logger.info(f'交易完成 {user_id}, 订单={biz_order_id}，触发自动好评')
+                        await self._handle_auto_rate(user_id, biz_order_id)
+                        return
 
             except:
                 pass

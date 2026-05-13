@@ -402,6 +402,45 @@ class XianyuApis:
             extra_params={"spm_pre": "a21ybx.home.searchInput.0"},
         )
 
+    # ========== 订单管理 API ==========
+
+    def virtual_delivery(self, biz_order_id: str) -> dict:
+        """虚拟发货（无需物流）
+
+        用于虚拟商品订单，标记为已发货/无需发货。
+
+        Args:
+            biz_order_id: 闲鱼订单ID
+
+        Returns:
+            API响应字典，成功时 ret 包含 SUCCESS
+        """
+        data_val = json.dumps({"bizOrderId": biz_order_id})
+        return self._call_mtop_api(
+            "mtop.idle.order.dummy.send", "1.0", data_val
+        )
+
+    def rate_buyer(self, biz_order_id: str, content: str = "好买家，交易愉快") -> dict:
+        """卖家评价买家（好评）
+
+        交易完成后卖家给买家好评。
+
+        Args:
+            biz_order_id: 闲鱼订单ID
+            content: 评价内容
+
+        Returns:
+            API响应字典，成功时 ret 包含 SUCCESS
+        """
+        data_val = json.dumps({
+            "bizOrderId": biz_order_id,
+            "content": content,
+            "score": 5,
+        })
+        return self._call_mtop_api(
+            "mtop.idle.order.rate", "1.0", data_val
+        )
+
     def upload_media(self, image_path: str) -> dict:
         """上传图片到闲鱼服务器，返回 {url, width, height}
 

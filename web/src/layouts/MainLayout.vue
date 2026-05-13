@@ -46,6 +46,10 @@
           <el-icon><Goods /></el-icon>
           <span>商品管理</span>
         </el-menu-item>
+        <el-menu-item index="/orders">
+          <el-icon><Box /></el-icon>
+          <span>订单管理</span>
+        </el-menu-item>
         <el-menu-item index="/analytics">
           <el-icon><TrendCharts /></el-icon>
           <span>数据分析</span>
@@ -116,6 +120,7 @@ const pageTitles: Record<string, string> = {
   '/': '仪表盘',
   '/conversations': '对话监控',
   '/items': '商品管理',
+  '/orders': '订单管理',
   '/analytics': '数据分析',
   '/config': '配置管理',
   '/logs': '运行日志',

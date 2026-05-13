@@ -88,6 +88,28 @@ class ChatContextManager:
         )
         ''')
         
+        # 创建订单表
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            biz_order_id TEXT NOT NULL UNIQUE,
+            user_id TEXT NOT NULL,
+            item_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            delivery_result TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            delivered_at DATETIME
+        )
+        ''')
+
+        cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status)
+        ''')
+
+        cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_orders_created ON orders (created_at)
+        ''')
+
         conn.commit()
         conn.close()
         logger.info(f"聊天历史数据库初始化完成: {self.db_path}")
@@ -411,5 +433,132 @@ class ChatContextManager:
         except Exception as e:
             logger.error(f"记录指令日志出错: {e}")
             conn.rollback()
+        finally:
+            conn.close()
+
+    # ========== 订单管理 ==========
+
+    def save_order(
+        self,
+        biz_order_id: str,
+        user_id: str,
+        item_id: str | None = None,
+        status: str = "pending",
+        delivery_result: str | None = None,
+    ) -> None:
+        """保存或更新订单记录
+
+        Args:
+            biz_order_id: 闲鱼订单ID
+            user_id: 买家用户ID
+            item_id: 商品ID
+            status: 订单状态 (pending/delivered/failed)
+            delivery_result: 发货API返回结果
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            now = datetime.now().isoformat()
+            delivered_at = now if status == "delivered" else None
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO orders (biz_order_id, user_id, item_id, status, delivery_result, created_at, delivered_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(biz_order_id)
+                DO UPDATE SET status = ?, delivery_result = ?, delivered_at = ?
+                """,
+                (
+                    biz_order_id, user_id, item_id, status, delivery_result, now, delivered_at,
+                    status, delivery_result, delivered_at,
+                ),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.error(f"保存订单记录出错: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
+
+    def get_recent_orders(self, limit: int = 50, offset: int = 0) -> list[dict]:
+        """查询最近的订单记录
+
+        Args:
+            limit: 返回数量
+            offset: 偏移量
+
+        Returns:
+            订单字典列表
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT biz_order_id, user_id, item_id, status, delivery_result, created_at, delivered_at "
+                "FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "biz_order_id": r[0],
+                    "user_id": r[1],
+                    "item_id": r[2],
+                    "status": r[3],
+                    "delivery_result": r[4],
+                    "created_at": r[5],
+                    "delivered_at": r[6],
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error(f"查询订单记录出错: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def get_order_stats(self) -> dict:
+        """获取订单统计信息"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            today = datetime.now().strftime("%Y-%m-%d")
+
+            cursor.execute("SELECT COUNT(*) FROM orders")
+            total = cursor.fetchone()[0]
+
+            cursor.execute(
+                "SELECT status, COUNT(*) FROM orders GROUP BY status",
+            )
+            by_status = {row[0]: row[1] for row in cursor.fetchall()}
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM orders WHERE date(created_at) = ?",
+                (today,),
+            )
+            today_count = cursor.fetchone()[0]
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM orders WHERE status = 'delivered' AND date(delivered_at) = ?",
+                (today,),
+            )
+            today_delivered = cursor.fetchone()[0]
+
+            return {
+                "total": total,
+                "pending": by_status.get("pending", 0),
+                "delivered": by_status.get("delivered", 0),
+                "failed": by_status.get("failed", 0),
+                "rated": by_status.get("rated", 0),
+                "rate_failed": by_status.get("rate_failed", 0),
+                "today_count": today_count,
+                "today_delivered": today_delivered,
+            }
+        except Exception as e:
+            logger.error(f"获取订单统计出错: {e}")
+            return {
+                "total": 0, "pending": 0, "delivered": 0,
+                "failed": 0, "rated": 0, "rate_failed": 0,
+                "today_count": 0, "today_delivered": 0,
+            }
         finally:
             conn.close() 

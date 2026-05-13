@@ -88,10 +88,11 @@ def create_app(bridge: StateBridge | None = None) -> FastAPI:
     app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 
     # Import and register route modules
-    from server.routes import items, config, conversations, analytics, status, ws
+    from server.routes import items, config, conversations, analytics, status, ws, orders
 
     app.include_router(status.router, prefix="/api", tags=["status"])
     app.include_router(items.router, prefix="/api", tags=["items"])
+    app.include_router(orders.router, prefix="/api", tags=["orders"])
     app.include_router(conversations.router, prefix="/api", tags=["conversations"])
     app.include_router(analytics.router, prefix="/api", tags=["analytics"])
     app.include_router(config.router, prefix="/api/config", tags=["config"])
