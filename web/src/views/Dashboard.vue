@@ -56,6 +56,27 @@
       </div>
     </div>
 
+    <!-- 多账号概览 -->
+    <el-card v-if="accountId === '__all__' && accounts.length > 1" class="section-card">
+      <template #header>
+        <div class="card-header">
+          <span class="card-title">多账号概览</span>
+          <el-tag size="small" type="info">{{ accounts.filter(a => a.online).length }}/{{ accounts.length }} 在线</el-tag>
+        </div>
+      </template>
+      <el-table :data="accounts" stripe size="small">
+        <el-table-column prop="display_name" label="账号" min-width="140" />
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.online ? 'success' : 'danger'" size="small" effect="light">
+              {{ row.online ? '在线' : '离线' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="manual_mode_count" label="手动接管" width="90" />
+      </el-table>
+    </el-card>
+
     <!-- Health Table -->
     <el-card class="section-card">
       <template #header>
@@ -102,12 +123,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import api from '../api'
+
+const props = defineProps<{ accountId?: string }>()
 
 const stats = ref<Record<string, unknown>>({})
 const healthItems = ref<any[]>([])
 const activities = ref<any[]>([])
+const accounts = ref<any[]>([])
 const loading = ref(false)
 
 function healthType(h: string) {
@@ -117,19 +141,25 @@ function healthLabel(h: string) {
   return { excellent: '优秀', good: '良好', warning: '偏低', critical: '极差' }[h] || h
 }
 
-onMounted(async () => {
+async function loadData() {
   loading.value = true
   try {
-    const [summaryRes, healthRes] = await Promise.all([
-      api.get('/stats/summary'),
+    const params = props.accountId ? { account_id: props.accountId } : {}
+    const [summaryRes, healthRes, accountsRes] = await Promise.all([
+      api.get('/stats/summary', { params }),
       api.get('/analytics/item-health'),
+      api.get('/accounts'),
     ])
     stats.value = summaryRes.data
     healthItems.value = healthRes.data.items || []
+    accounts.value = accountsRes.data || []
   } catch { /* ignore */ } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(loadData)
+watch(() => props.accountId, loadData)
 </script>
 
 <style scoped>

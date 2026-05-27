@@ -16,11 +16,33 @@ from loguru import logger
 load_dotenv()
 
 from server.auth import router as auth_router
-from server.state import StateBridge
+from server.state import StateBridge, create_log_sink
 
 
-def _try_init_bot(bridge: StateBridge) -> None:
-    """Try to initialize XianyuLive bot instance if COOKIES_STR is available."""
+async def _init_multi_account(bridge: StateBridge) -> None:
+    """Initialize AccountManager with multi-account support.
+
+    If accounts.yaml exists and has enabled accounts, use it.
+    Otherwise, fall back to single-account mode from COOKIES_STR in .env.
+    """
+    from account_manager import AccountManager
+
+    manager = AccountManager(bridge, config_path="accounts.yaml")
+    enabled = manager.load_config()
+
+    if not enabled:
+        # 没有多账号配置，回退到单账号模式
+        logger.info("未找到多账号配置，使用单账号兼容模式")
+        _fallback_single_bot(bridge, manager)
+        return
+
+    # 多账号模式
+    logger.info(f"多账号模式: 共 {len(enabled)} 个账号")
+    await manager.start_all()
+
+
+def _fallback_single_bot(bridge: StateBridge, manager) -> None:
+    """Fallback: single bot from COOKIES_STR env var."""
     cookies_str = os.getenv("COOKIES_STR", "")
     if not cookies_str or cookies_str == "your_cookies_here":
         logger.warning("COOKIES_STR 未配置，Bot 未初始化（可在 Web 界面启动）")
@@ -28,17 +50,16 @@ def _try_init_bot(bridge: StateBridge) -> None:
 
     try:
         from main import XianyuLive
-        from server.state import create_log_sink
 
         bot = XianyuLive(cookies_str)
         bot.event_bus = bridge.event_bus
+        bot.xianyu.event_bus = bridge.event_bus
         bridge.set_bot(bot)
 
-        # Add log sink for real-time log streaming
         log_level = os.getenv("LOG_LEVEL", "DEBUG").upper()
         logger.add(create_log_sink(bridge.event_bus), level=log_level)
 
-        logger.info("Bot 实例已初始化（未启动，可通过 Web 界面控制）")
+        logger.info("Bot 实例已初始化（单账号兼容模式）")
     except Exception as e:
         logger.error(f"Bot 初始化失败: {e}")
 
@@ -47,19 +68,23 @@ def _try_init_bot(bridge: StateBridge) -> None:
 async def lifespan(app: FastAPI):
     """Manage bot lifecycle within FastAPI."""
     bridge: StateBridge = app.state.bridge  # type: ignore[attr-defined]
+    manager = getattr(app.state, "account_manager", None)
 
-    # Auto-init bot if not already done (e.g. started via main.py)
-    if bridge.bot is None:
-        _try_init_bot(bridge)
+    # Auto-init if not already done (e.g. started via main.py)
+    if not bridge._bots:
+        await _init_multi_account(bridge)
 
     yield
 
-    # Cleanup bot task if we started it
-    if bridge.bot_task and not bridge.bot_task.done():
+    # Cleanup: stop all bots
+    logger.info("应用关闭，停止所有 Bot...")
+    if manager:
+        await manager.stop_all()
+    elif bridge.bot_task and not bridge.bot_task.done():
         bridge.bot_task.cancel()
         try:
             await bridge.bot_task
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, Exception):
             pass
 
 
@@ -75,6 +100,10 @@ def create_app(bridge: StateBridge | None = None) -> FastAPI:
     # Store StateBridge
     app.state.bridge = bridge or StateBridge()
 
+    # Store AccountManager (created in lifespan)
+    from account_manager import AccountManager
+    app.state.account_manager = AccountManager(app.state.bridge, config_path="accounts.yaml")
+
     # CORS for dev mode
     app.add_middleware(
         CORSMiddleware,
@@ -87,7 +116,6 @@ def create_app(bridge: StateBridge | None = None) -> FastAPI:
     # Register routers
     app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 
-    # Import and register route modules
     from server.routes import items, config, conversations, analytics, status, ws, orders
 
     app.include_router(status.router, prefix="/api", tags=["status"])

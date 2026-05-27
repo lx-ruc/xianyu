@@ -7,20 +7,28 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query
 
-from server.deps import BridgeDep, UserDep
+from server.deps import BotAccountDep, BridgeDep, UserDep
 
 router = APIRouter()
+
+
+def _resolve_bot(bridge: BridgeDep, bot_account: BotAccountDep):
+    bot, _ = bot_account
+    if bot is None:
+        bot = bridge.bot
+    return bot
 
 
 @router.get("/analytics/trend")
 async def get_trend(
     bridge: BridgeDep,
+    bot_account: BotAccountDep,
     _user: UserDep,
     item_id: str | None = Query(None),
     hours: int = Query(168, ge=1),
 ):
     """Get item analytics trend over time."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         return {"trend": []}
 
@@ -119,7 +127,6 @@ async def get_ranking(bridge: BridgeDep, _user: UserDep):
         my_in_keyword = []
         for my_item in my_items:
             title = my_item.get("title", "")
-            # Simple keyword match
             if any(kw in title for kw in keyword.split()):
                 my_in_keyword.append({
                     "item_id": my_item.get("item_id", ""),

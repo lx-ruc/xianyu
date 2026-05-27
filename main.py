@@ -19,7 +19,11 @@ from command_parser import CommandParser, HELP_TEXT
 
 
 class XianyuLive:
-    def __init__(self, cookies_str):
+    def __init__(self, cookies_str, account_id=None, display_name=None, account_config=None):
+        self.account_id = account_id or "default"
+        self.display_name = display_name or "默认账号"
+        self.account_config = account_config  # AccountConfig or None
+
         self.xianyu = XianyuApis()
         self.base_url = 'wss://wss-goofish.dingtalk.com/'
         self.cookies_str = cookies_str
@@ -27,18 +31,23 @@ class XianyuLive:
         self.xianyu.session.cookies.update(self.cookies)  # 直接使用 session.cookies.update
         self.myid = self.cookies['unb']
         self.device_id = generate_device_id(self.myid)
-        self.context_manager = ChatContextManager()
+
+        # 账号隔离的数据库路径
+        db_path = account_config.db_path if account_config and account_config.db_path else f"data/chat_history_{self.account_id}.db"
+        self.context_manager = ChatContextManager(db_path=db_path)
         
         # 心跳相关配置
-        self.heartbeat_interval = int(os.getenv("HEARTBEAT_INTERVAL", "15"))  # 心跳间隔，默认15秒
-        self.heartbeat_timeout = int(os.getenv("HEARTBEAT_TIMEOUT", "5"))     # 心跳超时，默认5秒
+        self.heartbeat_interval = int(os.getenv("HEARTBEAT_INTERVAL", "15"))  # 心跳基础间隔，默认15秒
+        self.heartbeat_jitter = int(os.getenv("HEARTBEAT_JITTER", "10"))      # 心跳随机抖动量，默认±10秒
+        self.heartbeat_timeout = int(os.getenv("HEARTBEAT_TIMEOUT", "10"))     # 心跳超时，默认10秒
         self.last_heartbeat_time = 0
         self.last_heartbeat_response = 0
         self.heartbeat_task = None
         self.ws = None
         
-        # Token刷新相关配置
-        self.token_refresh_interval = int(os.getenv("TOKEN_REFRESH_INTERVAL", "3600"))  # Token刷新间隔，默认1小时
+        # Token刷新相关配置（默认 7200-14400s = 2-4小时，用 jitter 避免规律性）
+        self.token_refresh_interval = int(os.getenv("TOKEN_REFRESH_INTERVAL", "7200"))  # Token刷新基础间隔，默认2小时
+        self.token_refresh_jitter = int(os.getenv("TOKEN_REFRESH_JITTER", "7200"))      # Token刷新抖动量，默认也2h
         self.token_retry_interval = int(os.getenv("TOKEN_RETRY_INTERVAL", "300"))       # Token重试间隔，默认5分钟
         self.last_token_refresh_time = 0
         self.current_token = None
@@ -98,13 +107,17 @@ class XianyuLive:
             return None
 
     async def token_refresh_loop(self):
-        """Token刷新循环"""
+        """Token刷新循环（带随机抖动，避免规律性触发风控）"""
+        # 使用随机化后的首次刷新间隔
+        jittered_base = self.token_refresh_interval + random.uniform(
+            0, self.token_refresh_jitter
+        )
         while True:
             try:
                 current_time = time.time()
-                
+
                 # 检查是否需要刷新token
-                if current_time - self.last_token_refresh_time >= self.token_refresh_interval:
+                if current_time - self.last_token_refresh_time >= jittered_base:
                     logger.info("Token即将过期，准备刷新...")
                     
                     new_token = await self.refresh_token()
@@ -162,7 +175,7 @@ class XianyuLive:
                     if len(card_list) < 20:
                         break
                     page += 1
-                    await asyncio.sleep(0.5)
+                    # API 层已内置随机延迟，这里只需短暂 yield
 
                 if not all_items:
                     logger.info("无在售商品，跳过擦亮")
@@ -859,17 +872,22 @@ class XianyuLive:
                 "timestamp": datetime.now().isoformat(),
             })
 
-            # 模拟人工输入延迟
-            if self.simulate_human_typing:
-                # 基础延迟 0-1秒 + 每字 0.1-0.3秒
-                base_delay = random.uniform(0, 1)
-                typing_delay = len(bot_reply) * random.uniform(0.1, 0.3)
-                total_delay = base_delay + typing_delay
-                # 设置最大延迟上限，防止过长回复等待太久
-                total_delay = min(total_delay, 10.0)
+            # ── 发送前随机延迟（反风控核心措施） ──
+            # 基础延迟：1-3秒，模拟人类阅读+思考时间
+            base_delay = random.uniform(1.0, 3.0)
+            total_delay = base_delay
 
+            if self.simulate_human_typing:
+                # 额外打字延迟：每字 0.1-0.3秒
+                typing_delay = len(bot_reply) * random.uniform(0.1, 0.3)
+                total_delay += typing_delay
+                # 设置最大延迟上限，防止过长回复等待太久
+                total_delay = min(total_delay, 12.0)
                 logger.info(f"模拟人工输入，延迟发送 {total_delay:.2f} 秒...")
-                await asyncio.sleep(total_delay)
+            else:
+                logger.debug(f"发送前随机延迟 {total_delay:.2f} 秒...")
+
+            await asyncio.sleep(total_delay)
 
             await self.send_msg(websocket, chat_id, send_user_id, bot_reply)
 
@@ -1012,20 +1030,29 @@ class XianyuLive:
             raise
 
     async def heartbeat_loop(self, ws):
-        """心跳维护循环"""
+        """心跳维护循环（带随机抖动，避免规律性被检测）"""
         while True:
             try:
                 current_time = time.time()
-                
+
+                # 计算下次心跳时间（带抖动）
+                jittered_interval = self.heartbeat_interval + random.uniform(
+                    -self.heartbeat_jitter, self.heartbeat_jitter
+                )
+                jittered_interval = max(8, jittered_interval)  # 最小 8 秒
+
                 # 检查是否需要发送心跳
-                if current_time - self.last_heartbeat_time >= self.heartbeat_interval:
+                if current_time - self.last_heartbeat_time >= jittered_interval:
                     await self.send_heartbeat(ws)
-                
+                    # 重新随机上次心跳时间，让下次触发也抖动
+                    self.last_heartbeat_time = current_time
+
                 # 检查上次心跳响应时间，如果超时则认为连接已断开
-                if (current_time - self.last_heartbeat_response) > (self.heartbeat_interval + self.heartbeat_timeout):
+                timeout_limit = self.heartbeat_interval + self.heartbeat_jitter + self.heartbeat_timeout
+                if (current_time - self.last_heartbeat_response) > timeout_limit:
                     logger.warning("心跳响应超时，可能连接已断开")
                     break
-                
+
                 await asyncio.sleep(1)
             except Exception as e:
                 logger.error(f"心跳循环出错: {e}")
@@ -1215,6 +1242,31 @@ def check_and_complete_env():
         logger.info("新的配置已保存/更新至 .env 文件中")
 
 
+async def _run_multi_account_no_web():
+    """纯 bot 模式：多账号并行启动."""
+    from account_manager import AccountManager
+    from server.state import StateBridge
+
+    bridge = StateBridge()
+    manager = AccountManager(bridge)
+    enabled = manager.load_config()
+
+    if enabled:
+        logger.info(f"多账号纯 Bot 模式: 启动 {len(enabled)} 个账号")
+        await manager.start_all()
+        # 保持运行
+        while True:
+            await asyncio.sleep(60)
+    else:
+        # 回退单账号
+        cookies_str = os.getenv("COOKIES_STR")
+        if cookies_str and cookies_str != "your_cookies_here":
+            bot = XianyuLive(cookies_str)
+            await bot.main()
+        else:
+            logger.error("未配置任何账号（accounts.yaml 和 .env 均无有效配置）")
+
+
 if __name__ == '__main__':
     import argparse
 
@@ -1222,6 +1274,7 @@ if __name__ == '__main__':
     parser.add_argument("--no-web", action="store_true", help="跳过 Web 界面，仅运行 bot")
     parser.add_argument("--host", default="0.0.0.0", help="Web 服务监听地址")
     parser.add_argument("--port", type=int, default=8000, help="Web 服务监听端口")
+    parser.add_argument("--multi", action="store_true", default=True, help="启用多账号模式（默认开启）")
     args = parser.parse_args()
 
     # 加载环境变量
@@ -1243,36 +1296,31 @@ if __name__ == '__main__':
     )
     logger.info(f"日志级别设置为: {log_level}")
 
-    # 交互式检查并补全配置
-    check_and_complete_env()
-
-    cookies_str = os.getenv("COOKIES_STR")
-    bot = XianyuReplyBot()
-    xianyuLive = XianyuLive(cookies_str)
+    # 检查是否有多账号配置
+    accounts_config_exists = os.path.exists("accounts.yaml")
 
     if args.no_web:
-        # 纯 bot 模式（原有行为）
-        logger.info("以纯 bot 模式启动（无 Web 界面）")
-        asyncio.run(xianyuLive.main())
+        # 纯 bot 模式
+        if accounts_config_exists:
+            logger.info("以多账号纯 Bot 模式启动（无 Web 界面）")
+            asyncio.run(_run_multi_account_no_web())
+        else:
+            # 单账号模式（原有行为）
+            check_and_complete_env()
+            cookies_str = os.getenv("COOKIES_STR")
+            xianyuLive = XianyuLive(cookies_str)
+            logger.info("以单账号纯 Bot 模式启动（无 Web 界面）")
+            asyncio.run(xianyuLive.main())
     else:
-        # Web + Bot 模式
+        # Web + Bot 模式 — 由 server 模块统一管理
         import uvicorn
         from server import create_app
-        from server.state import StateBridge, create_log_sink
+        from server.state import StateBridge
 
-        # 添加日志 sink 推送到 EventBus
         bridge = StateBridge()
-        bridge.set_bot(xianyuLive)
-        xianyuLive.event_bus = bridge.event_bus  # Allow bot to publish events
-        logger.add(create_log_sink(bridge.event_bus), level=log_level)
-
         app = create_app(bridge)
 
-        # Start bot as background task inside uvicorn's event loop
-        @app.on_event("startup")
-        async def start_bot():
-            asyncio.create_task(xianyuLive.main())
-            logger.info("Bot 后台任务已启动")
-
         logger.info(f"Web 管理界面启动: http://{args.host}:{args.port}")
+        if accounts_config_exists:
+            logger.info("多账号模式已启用，将在 Web 启动后加载")
         uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

@@ -3,20 +3,28 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from server.deps import BridgeDep, UserDep
+from server.deps import BotAccountDep, BridgeDep, UserDep
 
 router = APIRouter()
+
+
+def _resolve_bot(bridge: BridgeDep, bot_account: BotAccountDep):
+    bot, _ = bot_account
+    if bot is None:
+        bot = bridge.bot
+    return bot
 
 
 @router.get("/items")
 async def list_items(
     bridge: BridgeDep,
+    bot_account: BotAccountDep,
     _user: UserDep,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
     """List seller's items with pagination."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         return {"items": [], "total": 0, "page": page, "page_size": page_size}
 
@@ -47,13 +55,12 @@ async def list_items(
 
 
 @router.get("/items/{item_id}")
-async def get_item(item_id: str, bridge: BridgeDep, _user: UserDep):
+async def get_item(item_id: str, bridge: BridgeDep, bot_account: BotAccountDep, _user: UserDep):
     """Get item detail by ID."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         return {"error": "Bot not initialized"}
 
-    # Try cache first
     item_info = bot.context_manager.get_item_info(item_id)
     if not item_info:
         result = bot.xianyu.get_item_info(item_id)
@@ -67,9 +74,9 @@ async def get_item(item_id: str, bridge: BridgeDep, _user: UserDep):
 
 
 @router.post("/items/{item_id}/bump")
-async def bump_item(item_id: str, bridge: BridgeDep, _user: UserDep):
+async def bump_item(item_id: str, bridge: BridgeDep, bot_account: BotAccountDep, _user: UserDep):
     """Bump (擦亮) a single item."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         return {"error": "Bot not initialized"}
 
@@ -83,16 +90,15 @@ async def bump_item(item_id: str, bridge: BridgeDep, _user: UserDep):
 
 
 @router.post("/items/bump-all")
-async def bump_all_items(bridge: BridgeDep, _user: UserDep):
+async def bump_all_items(bridge: BridgeDep, bot_account: BotAccountDep, _user: UserDep):
     """Bump all listed items."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         return {"error": "Bot not initialized"}
 
     import asyncio
     import random
 
-    # Paginate to get all items (API limits page_size)
     all_cards: list[dict] = []
     page = 1
     while True:
@@ -131,9 +137,9 @@ async def bump_all_items(bridge: BridgeDep, _user: UserDep):
 
 
 @router.post("/items/sync")
-async def sync_items(bridge: BridgeDep, _user: UserDep):
+async def sync_items(bridge: BridgeDep, bot_account: BotAccountDep, _user: UserDep):
     """Sync items from Xianyu API to local database."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         return {"error": "Bot not initialized"}
 

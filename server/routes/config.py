@@ -27,11 +27,16 @@ class PromptUpdate(BaseModel):
 class SystemConfigUpdate(BaseModel):
     """Only non-sensitive fields."""
     heartbeat_interval: int | None = None
+    heartbeat_jitter: int | None = None
     heartbeat_timeout: int | None = None
     token_refresh_interval: int | None = None
+    token_refresh_jitter: int | None = None
     manual_mode_timeout: int | None = None
     message_expire_time: int | None = None
     simulate_human_typing: bool | None = None
+    api_delay_min: float | None = None
+    api_delay_max: float | None = None
+    risk_cooldown_seconds: int | None = None
     toggle_keywords: str | None = None
     model_base_url: str | None = None
     model_name: str | None = None
@@ -119,11 +124,16 @@ async def get_system_config(_user: UserDep):
     """Get non-sensitive system configuration."""
     return {
         "heartbeat_interval": int(os.getenv("HEARTBEAT_INTERVAL", "15")),
-        "heartbeat_timeout": int(os.getenv("HEARTBEAT_TIMEOUT", "5")),
-        "token_refresh_interval": int(os.getenv("TOKEN_REFRESH_INTERVAL", "3600")),
+        "heartbeat_jitter": int(os.getenv("HEARTBEAT_JITTER", "10")),
+        "heartbeat_timeout": int(os.getenv("HEARTBEAT_TIMEOUT", "10")),
+        "token_refresh_interval": int(os.getenv("TOKEN_REFRESH_INTERVAL", "7200")),
+        "token_refresh_jitter": int(os.getenv("TOKEN_REFRESH_JITTER", "7200")),
         "manual_mode_timeout": int(os.getenv("MANUAL_MODE_TIMEOUT", "3600")),
         "message_expire_time": int(os.getenv("MESSAGE_EXPIRE_TIME", "300000")),
         "simulate_human_typing": os.getenv("SIMULATE_HUMAN_TYPING", "False").lower() == "true",
+        "api_delay_min": float(os.getenv("API_DELAY_MIN", "1.0")),
+        "api_delay_max": float(os.getenv("API_DELAY_MAX", "3.0")),
+        "risk_cooldown_seconds": int(os.getenv("RISK_COOLDOWN_SECONDS", "600")),
         "toggle_keywords": os.getenv("TOGGLE_KEYWORDS", "。"),
         "model_base_url": os.getenv("MODEL_BASE_URL", ""),
         "model_name": os.getenv("MODEL_NAME", ""),

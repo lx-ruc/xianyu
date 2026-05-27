@@ -1,0 +1,22 @@
+# ============================================================
+# 多账号配置文件
+# 每个账号独立运行一个 Bot 实例，共用同一个 LLM（.env 中配置）
+# ============================================================
+
+accounts:
+  - account_id: "main"
+    display_name: "主账号"
+    cookies_str: "your_cookies_here"
+    enabled: true
+    # 以下为可选覆盖项（不填则使用 .env 中的全局配置）
+    # toggle_keywords: "。"
+    # auto_delivery: false
+    # auto_rate: false
+    # rate_content: "好买家，交易愉快"
+    # admin_user_ids:
+    #   - "user_id_1"
+
+  # - account_id: "shop_b"
+  #   display_name: "副账号-数码"
+  #   cookies_str: "your_second_cookies_here"
+  #   enabled: true

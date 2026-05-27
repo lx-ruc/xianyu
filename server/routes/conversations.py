@@ -2,26 +2,35 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from server.deps import BridgeDep, UserDep
+from server.deps import BotAccountDep, BridgeDep, UserDep
 
 router = APIRouter()
+
+
+def _resolve_bot(bridge: BridgeDep, bot_account: BotAccountDep):
+    """Resolve bot instance from account-aware dep, with fallback to active bot."""
+    bot, account_id = bot_account
+    if bot is None:
+        # fallback to bridge.bot (backward compat)
+        bot = bridge.bot
+    return bot
 
 
 @router.get("/conversations")
 async def list_conversations(
     bridge: BridgeDep,
+    bot_account: BotAccountDep,
     _user: UserDep,
     item_id: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
     """List recent conversations with latest message preview."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         return {"conversations": [], "total": 0}
 
@@ -41,7 +50,6 @@ async def list_conversations(
             )
         total = cursor.fetchone()[0]
 
-        # Get latest message per conversation
         if item_id:
             cursor.execute(
                 """
@@ -97,9 +105,9 @@ async def list_conversations(
 
 
 @router.get("/conversations/{chat_id}")
-async def get_conversation(chat_id: str, bridge: BridgeDep, _user: UserDep):
+async def get_conversation(chat_id: str, bridge: BridgeDep, bot_account: BotAccountDep, _user: UserDep):
     """Get conversation detail with full message history."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not initialized")
 
@@ -140,13 +148,12 @@ class ReplyBody(BaseModel):
 
 
 @router.post("/conversations/{chat_id}/reply")
-async def manual_reply(chat_id: str, body: ReplyBody, bridge: BridgeDep, _user: UserDep):
+async def manual_reply(chat_id: str, body: ReplyBody, bridge: BridgeDep, bot_account: BotAccountDep, _user: UserDep):
     """Send a manual reply in a conversation."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None or bot.ws is None:
         raise HTTPException(status_code=503, detail="机器人未连接，无法发送消息")
 
-    # Find the user_id for this chat
     ctx = bot.context_manager
     conn = sqlite3.connect(ctx.db_path)
     try:
@@ -169,13 +176,13 @@ async def manual_reply(chat_id: str, body: ReplyBody, bridge: BridgeDep, _user: 
 
 
 class ToggleModeBody(BaseModel):
-    mode: str  # "manual" or "auto"
+    mode: str
 
 
 @router.post("/conversations/{chat_id}/toggle-mode")
-async def toggle_mode(chat_id: str, body: ToggleModeBody, bridge: BridgeDep, _user: UserDep):
+async def toggle_mode(chat_id: str, body: ToggleModeBody, bridge: BridgeDep, bot_account: BotAccountDep, _user: UserDep):
     """Toggle conversation between auto and manual mode."""
-    bot = bridge.bot
+    bot = _resolve_bot(bridge, bot_account)
     if bot is None:
         raise HTTPException(status_code=503, detail="Bot not initialized")
 
@@ -186,7 +193,6 @@ async def toggle_mode(chat_id: str, body: ToggleModeBody, bridge: BridgeDep, _us
     else:
         raise HTTPException(status_code=400, detail="mode must be 'manual' or 'auto'")
 
-    # Publish event
     if bridge.event_bus:
         bridge.event_bus.publish("mode_change", {
             "chat_id": chat_id,

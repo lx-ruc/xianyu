@@ -5,65 +5,113 @@ import asyncio
 
 from fastapi import APIRouter
 
-from server.deps import BridgeDep, UserDep
+from server.deps import AccountManagerDep, BotAccountDep, BridgeDep, UserDep
 
 router = APIRouter()
 
 
 @router.get("/status")
 async def get_status(bridge: BridgeDep, _user: UserDep):
-    """System status: bot online/offline, connection state."""
-    bot = bridge.bot
-    if bot is None:
-        return {"bot_online": False, "ws_connected": False}
+    """System status: all bots online/offline, connection state."""
+    if not bridge._bots:
+        return {"bot_online": False, "accounts": []}
+
+    statuses = bridge.get_bot_statuses()
+    accounts = []
+    for aid, s in statuses.items():
+        bot = bridge.get_bot(aid)
+        accounts.append({
+            "account_id": aid,
+            "display_name": getattr(bot, "display_name", aid),
+            "bot_online": s["online"],
+            "ws_connected": s["ws_connected"],
+            "last_heartbeat": s["last_heartbeat"],
+            "manual_mode_count": s["manual_mode_count"],
+        })
 
     return {
-        "bot_online": bot.ws is not None,
-        "ws_connected": bot.ws is not None and not bot.ws.closed,
-        "last_heartbeat": bot.last_heartbeat_time,
-        "last_token_refresh": bot.last_token_refresh_time,
-        "manual_mode_count": len(bot.manual_mode_conversations),
+        "bot_online": any(s["online"] for s in statuses.values()),
+        "accounts": accounts,
     }
 
 
+@router.get("/accounts")
+async def list_accounts(bridge: BridgeDep, _user: UserDep):
+    """List all configured accounts with their status."""
+    statuses = bridge.get_bot_statuses()
+    accounts = []
+    for aid, s in statuses.items():
+        bot = bridge.get_bot(aid)
+        accounts.append({
+            "account_id": aid,
+            "display_name": getattr(bot, "display_name", aid),
+            "online": s["online"],
+            "ws_connected": s["ws_connected"],
+            "last_heartbeat": s["last_heartbeat"],
+            "manual_mode_count": s["manual_mode_count"],
+        })
+    return accounts
+
+
 @router.post("/bot/start")
-async def start_bot(bridge: BridgeDep, _user: UserDep):
-    """Start the bot background task."""
-    bot = bridge.bot
-    if bot is None:
-        return {"error": "Bot 实例未初始化，请通过 main.py 启动"}
+async def start_bot(bot_account: BotAccountDep, account_manager: AccountManagerDep, _user: UserDep):
+    """Start a specific bot by account_id."""
+    bot, account_id = bot_account
 
-    if bot.ws is not None:
-        return {"error": "Bot 已在线，无需重复启动"}
+    # If bot exists and is online
+    if bot is not None and bot.ws is not None and not bot.ws.closed:
+        return {"error": f"账号 [{account_id}] 已在线，无需重复启动"}
 
-    # Reset stop flag and start
-    bot._stop_requested = False
-    task = asyncio.create_task(bot.main())
-    bridge.bot_task = task
-    return {"message": "Bot 启动中..."}
+    # If bot doesn't exist, try restarting via account manager
+    if account_manager:
+        success = await account_manager.restart_account(account_id)
+        if success:
+            return {"message": f"账号 [{account_id}] 启动中..."}
+        return {"error": f"账号 [{account_id}] 启动失败，请检查配置"}
+
+    return {"error": "AccountManager 未初始化"}
 
 
 @router.post("/bot/stop")
-async def stop_bot(bridge: BridgeDep, _user: UserDep):
-    """Stop the bot."""
-    bot = bridge.bot
+async def stop_bot(bot_account: BotAccountDep, account_manager: AccountManagerDep, _user: UserDep):
+    """Stop a specific bot by account_id."""
+    bot, account_id = bot_account
+
     if bot is None:
-        return {"error": "Bot 实例未初始化"}
+        return {"error": f"账号 [{account_id}] 未初始化"}
 
     if bot.ws is None:
-        return {"error": "Bot 已离线"}
+        return {"error": f"账号 [{account_id}] 已离线"}
 
+    if account_manager:
+        success = await account_manager.stop_account(account_id)
+        if success:
+            return {"message": f"账号 [{account_id}] 正在停止..."}
+        return {"error": "停止失败"}
+
+    # fallback: direct stop
     bot.request_stop()
-    return {"message": "Bot 正在停止..."}
+    return {"message": f"账号 [{account_id}] 正在停止..."}
 
 
 @router.get("/stats/summary")
-async def get_stats_summary(bridge: BridgeDep, _user: UserDep):
+async def get_stats_summary(bot_account: BotAccountDep, _user: UserDep):
     """Dashboard summary: today's conversations, items, next bump time."""
     from datetime import datetime
 
-    bot = bridge.bot
-    ctx = bot.context_manager if bot else None
+    bot, account_id = bot_account
+
+    if bot is None:
+        return {
+            "account_id": account_id,
+            "bot_online": False,
+            "today_messages": 0,
+            "today_conversations": 0,
+            "item_count": 0,
+            "manual_mode_count": 0,
+        }
+
+    ctx = bot.context_manager
 
     # Count today's messages from SQLite
     today_msg_count = 0
@@ -102,7 +150,9 @@ async def get_stats_summary(bridge: BridgeDep, _user: UserDep):
         pass
 
     return {
-        "bot_online": bot.ws is not None if bot else False,
+        "account_id": account_id,
+        "display_name": getattr(bot, "display_name", account_id),
+        "bot_online": bot.ws is not None,
         "today_messages": today_msg_count,
         "today_conversations": active_conversations,
         "item_count": item_count,

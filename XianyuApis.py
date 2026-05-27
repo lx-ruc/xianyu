@@ -3,6 +3,7 @@ import time
 import os
 import re
 import sys
+import random
 
 import requests
 from loguru import logger
@@ -13,9 +14,21 @@ MTOP_BASE_URL = 'https://h5api.m.goofish.com/h5'
 
 
 class XianyuApis:
+    # ── 风控参数（可通过环境变量覆盖） ──
+    # 每次 API 调用前的基础随机延迟（秒）
+    API_DELAY_MIN = float(os.getenv("API_DELAY_MIN", "1.0"))
+    API_DELAY_MAX = float(os.getenv("API_DELAY_MAX", "3.0"))
+    # 风控触发后冷却时间（秒）
+    COOLDOWN_SECONDS = int(os.getenv("RISK_COOLDOWN_SECONDS", "600"))
+    # 同一 API 连续失败多少次触发冷却
+    MAX_CONSECUTIVE_FAILURES = int(os.getenv("MAX_CONSECUTIVE_FAILURES", "5"))
+
     def __init__(self):
         self.url = 'https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/'
         self.session = requests.Session()
+        # 风控状态
+        self._consecutive_failures: int = 0
+        self._cooldown_until: float = 0.0  # 冷却结束时间戳
         self.session.headers.update({
             'accept': 'application/json',
             'accept-language': 'zh-CN,zh;q=0.9',
@@ -55,9 +68,23 @@ class XianyuApis:
         Returns:
             API响应的JSON字典
         """
+        # ── 风控冷却检查 ──
+        now = time.time()
+        if self._cooldown_until > now:
+            remaining = int(self._cooldown_until - now)
+            logger.warning(f"⚠️ 风控冷却中，剩余 {remaining}s，跳过 API 调用: {api_name}")
+            return {"error": f"风控冷却中: {remaining}s 后恢复"}
+
         if retry_count >= max_retries:
             logger.error(f"MTOP API 调用失败，重试次数过多: {api_name}")
             return {"error": f"MTOP API 调用失败: {api_name}"}
+
+        # ── 请求前随机延迟，避免过于规律的调用 ──
+        delay = random.uniform(self.API_DELAY_MIN, self.API_DELAY_MAX)
+        if retry_count > 0:
+            # 重试时使用指数退避: 2^n * 基础延迟
+            delay = delay * (2 ** retry_count) + random.uniform(0, retry_count)
+        time.sleep(delay)
 
         params = {
             'jsv': '2.7.2',
@@ -94,13 +121,31 @@ class XianyuApis:
             ret_value = res_json.get('ret', [])
             if not any('SUCCESS' in ret for ret in ret_value):
                 error_msg = str(ret_value)
+                self._consecutive_failures += 1
 
                 # 风控处理
                 if 'RGV587_ERROR' in error_msg or '被挤爆啦' in error_msg:
-                    logger.error(f"触发风控: {ret_value}")
-                    print("\n" + "=" * 50)
-                    new_cookie_str = input("请输入新的Cookie字符串 (直接回车退出): ").strip()
-                    print("=" * 50 + "\n")
+                    logger.error(f"🚨 触发风控: {ret_value}")
+                    self._consecutive_failures = self.MAX_CONSECUTIVE_FAILURES  # 直接触发冷却
+
+                    # 自动进入冷却期
+                    cooldown_mins = self.COOLDOWN_SECONDS / 60
+                    logger.warning(f"⏸️ 自动进入风控冷却期 ({cooldown_mins:.0f} 分钟)")
+
+                    # 通过 EventBus 发布风控事件（如果 bot 注入了 event_bus）
+                    if hasattr(self, 'event_bus') and self.event_bus:
+                        self.event_bus.publish("risk_alert", {
+                            "type": "risk_control",
+                            "api_name": api_name,
+                            "error": error_msg[:100],
+                            "cooldown_seconds": self.COOLDOWN_SECONDS,
+                        })
+
+                    print("\n" + "=" * 55)
+                    print(f"🚨 闲鱼风控触发！自动冷却 {cooldown_mins:.0f} 分钟")
+                    print("如需立即恢复，请输入新的 Cookie 字符串")
+                    print("=" * 55)
+                    new_cookie_str = input("新 Cookie (直接回车跳过): ").strip()
                     if new_cookie_str:
                         from http.cookies import SimpleCookie
                         cookie = SimpleCookie()
@@ -109,16 +154,31 @@ class XianyuApis:
                         for key, morsel in cookie.items():
                             self.session.cookies.set(key, morsel.value, domain='.goofish.com')
                         self.update_env_cookies()
+                        self._consecutive_failures = 0
+                        self._cooldown_until = 0
                         return self._call_mtop_api(api_name, version, data_val, 0, max_retries, extra_params)
                     else:
-                        sys.exit(1)
+                        # 开始冷却
+                        self._cooldown_until = time.time() + self.COOLDOWN_SECONDS
+                        return {"error": f"风控触发: 已进入 {cooldown_mins:.0f} 分钟冷却期"}
+
+                # 连续失败过多 → 自动冷却
+                if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                    logger.warning(
+                        f"⚠️ 连续 {self._consecutive_failures} 次 API 失败，"
+                        f"自动进入 {self.COOLDOWN_SECONDS / 60:.0f} 分钟冷却期"
+                    )
+                    self._cooldown_until = time.time() + self.COOLDOWN_SECONDS
+                    return {"error": "连续失败过多，已进入自动冷却期"}
 
                 logger.warning(f"API调用失败 [{api_name}]: {ret_value}")
                 if 'Set-Cookie' in response.headers:
                     self.clear_duplicate_cookies()
-                time.sleep(0.5)
+                # 指数退避延迟已在上面处理，这里直接重试
                 return self._call_mtop_api(api_name, version, data_val, retry_count + 1, max_retries, extra_params)
 
+            # ── 成功：重置失败计数 ──
+            self._consecutive_failures = 0
             return res_json
 
         except Exception as e:

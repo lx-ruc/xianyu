@@ -10,18 +10,45 @@
             <span v-if="!collapsed" class="brand-name">闲鱼助手</span>
           </transition>
         </div>
-        <div class="sidebar-status" v-if="!collapsed">
-          <span class="status-dot" :class="botOnline ? 'online' : 'offline'"></span>
-          <span class="status-text">{{ botOnline ? 'Bot 在线' : 'Bot 离线' }}</span>
-          <button
-            class="bot-toggle-btn"
-            :class="botOnline ? 'bot-stop' : 'bot-start'"
-            @click="toggleBot"
-            :disabled="botToggling"
-            :title="botOnline ? '停止机器人' : '启动机器人'"
+
+        <!-- 账号选择器 -->
+        <div class="account-selector" v-if="!collapsed">
+          <el-select
+            v-model="activeAccountId"
+            size="small"
+            popper-class="account-popper"
+            placeholder="选择账号"
+            @change="onAccountChange"
+            class="account-select"
           >
-            {{ botToggling ? '...' : (botOnline ? '停止' : '启动') }}
-          </button>
+            <el-option
+              v-for="acc in accounts"
+              :key="acc.account_id"
+              :label="acc.display_name"
+              :value="acc.account_id"
+            >
+              <span style="float: left">{{ acc.display_name }}</span>
+              <span style="float: right" :style="{ color: acc.online ? 'var(--color-success)' : 'var(--color-danger)' }">
+                {{ acc.online ? '在线' : '离线' }}
+              </span>
+            </el-option>
+          </el-select>
+          <div class="account-status-row">
+            <span class="status-dot" :class="currentAccountOnline ? 'online' : 'offline'"></span>
+            <span class="status-text" v-if="!currentAccountOnline">Bot 离线</span>
+            <button
+              class="bot-toggle-btn"
+              :class="currentAccountOnline ? 'bot-stop' : 'bot-start'"
+              @click="toggleBot"
+              :disabled="botToggling"
+              :title="currentAccountOnline ? '停止当前账号' : '启动当前账号'"
+            >
+              {{ botToggling ? '...' : (currentAccountOnline ? '停止' : '启动') }}
+            </button>
+          </div>
+        </div>
+        <div class="sidebar-status-mini" v-else>
+          <span class="status-dot" :class="anyBotOnline ? 'online' : 'offline'"></span>
         </div>
       </div>
 
@@ -80,9 +107,8 @@
           <h2 class="page-title">{{ pageTitle }}</h2>
         </div>
         <div class="header-right">
-          <div class="header-status" v-if="botOnline">
-            <span class="status-dot online"></span>
-            <span class="status-label">运行中</span>
+          <div class="header-status" v-if="accounts.length > 1">
+            <span class="accounts-summary">{{ accounts.filter(a => a.online).length }}/{{ accounts.length }} 在线</span>
           </div>
           <el-divider direction="vertical" />
           <span class="header-username">{{ auth.username }}</span>
@@ -93,14 +119,14 @@
         </div>
       </el-header>
       <el-main class="app-main">
-        <router-view />
+        <router-view :key="activeAccountId" :account-id="activeAccountId" />
       </el-main>
     </el-container>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, provide, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
@@ -112,6 +138,11 @@ const auth = useAuthStore()
 const botOnline = ref(false)
 const collapsed = ref(false)
 const botToggling = ref(false)
+
+// 多账号状态
+const accounts = ref<any[]>([])
+const activeAccountId = ref(localStorage.getItem('active_account_id') || '')
+
 let timer: number | null = null
 
 const sidebarWidth = computed(() => collapsed.value ? '64px' : '220px')
@@ -128,13 +159,46 @@ const pageTitles: Record<string, string> = {
 
 const pageTitle = computed(() => pageTitles[route.path] || '闲鱼智能助手')
 
-async function checkStatus() {
+const anyBotOnline = computed(() => accounts.value.some(a => a.online))
+
+const currentAccount = computed(() =>
+  accounts.value.find(a => a.account_id === activeAccountId.value)
+)
+
+const currentAccountOnline = computed(() =>
+  currentAccount.value?.online ?? false
+)
+
+// 提供给子组件
+provide('activeAccountId', activeAccountId)
+
+async function fetchAccounts() {
   try {
-    const { data } = await api.get('/status')
-    botOnline.value = data.bot_online
+    const { data } = await api.get('/accounts')
+    accounts.value = data || []
+    // 如果没有选中账号，选第一个
+    if (!activeAccountId.value && accounts.value.length > 0) {
+      activeAccountId.value = accounts.value[0].account_id
+      localStorage.setItem('active_account_id', activeAccountId.value)
+    }
   } catch {
-    botOnline.value = false
+    // 回退到单账号状态检查
+    try {
+      const { data } = await api.get('/status')
+      botOnline.value = data.bot_online
+      if (data.accounts && data.accounts.length > 0) {
+        accounts.value = data.accounts
+        if (!activeAccountId.value) {
+          activeAccountId.value = accounts.value[0].account_id
+          localStorage.setItem('active_account_id', activeAccountId.value)
+        }
+      }
+    } catch { /* ignore */ }
   }
+}
+
+function onAccountChange(id: string) {
+  localStorage.setItem('active_account_id', id)
 }
 
 function handleLogout() {
@@ -143,26 +207,27 @@ function handleLogout() {
 }
 
 async function toggleBot() {
+  if (!activeAccountId.value) return
   botToggling.value = true
   try {
-    const endpoint = botOnline.value ? '/bot/stop' : '/bot/start'
-    const { data } = await api.post(endpoint)
+    const endpoint = currentAccountOnline.value ? '/bot/stop' : '/bot/start'
+    const { data } = await api.post(`${endpoint}?account_id=${activeAccountId.value}`)
     if (data.error) {
       ElMessage.error(data.error)
     } else {
       ElMessage.success(data.message)
-      await checkStatus()
+      await fetchAccounts()
     }
   } catch {
-    ElMessage.error(botOnline.value ? '停止失败' : '启动失败')
+    ElMessage.error(currentAccountOnline.value ? '停止失败' : '启动失败')
   } finally {
     botToggling.value = false
   }
 }
 
 onMounted(() => {
-  checkStatus()
-  timer = window.setInterval(checkStatus, 30000)
+  fetchAccounts()
+  timer = window.setInterval(fetchAccounts, 30000)
 })
 
 onUnmounted(() => {
@@ -180,7 +245,7 @@ onUnmounted(() => {
 }
 
 .sidebar-header {
-  padding: var(--space-5);
+  padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
@@ -209,21 +274,32 @@ onUnmounted(() => {
   letter-spacing: -0.3px;
 }
 
-.sidebar-status {
+.account-select {
   margin-top: var(--space-3);
+  width: 100%;
+}
+
+.account-status-row {
   display: flex;
   align-items: center;
-  padding-left: 4px;
+  margin-top: var(--space-2);
+  gap: var(--space-2);
+}
+
+.sidebar-status-mini {
+  margin-top: var(--space-3);
+  display: flex;
+  justify-content: center;
 }
 
 .status-text {
   color: rgba(248, 250, 252, 0.5);
   font-size: var(--text-xs);
+  flex: 1;
 }
 
 .bot-toggle-btn {
-  margin-left: auto;
-  padding: 2px 10px;
+  padding: 2px 8px;
   border: none;
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
@@ -339,9 +415,9 @@ onUnmounted(() => {
   align-items: center;
 }
 
-.status-label {
+.accounts-summary {
   font-size: var(--text-sm);
-  color: var(--color-success);
+  color: var(--color-text-secondary);
   font-weight: 500;
 }
 
